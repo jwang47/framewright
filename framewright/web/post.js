@@ -47,6 +47,7 @@ export function createPost(app) {
     saveT: null, photos: new Map(), params: new Map(), renderer: null, canvas: null,
   };
   const view = $('#slideView');
+  let renderQueue = Promise.resolve();
 
   // --- photos ------------------------------------------------------------------
 
@@ -63,23 +64,35 @@ export function createPost(app) {
 
   // A photo with its edit applied, as an ImageBitmap, cached per size. size is
   // the long side to render at; by default a working size (4000px for export).
-  async function photo(ref, full = false, size = null) {
+  async function photo(ref, full = false, size = null, background = false) {
     const { params, source } = await editFor(ref);
     const max = size || (full ? 4000 : 1600);
     const k = `${ref}|${full}|${max}|${source}|${JSON.stringify(params)}`;
     if (!st.photos.has(k)) {
       st.photos.set(k, (async () => {
-        if (!st.renderer) {
-          st.canvas = document.createElement('canvas');
-          st.renderer = new Renderer(st.canvas);
-        }
         const [shoot, key] = ref.split('/');
-        const img = await loadSource(app, { shoot, key }, source, { full });
-        st.renderer.setImage(img);
-        release(img);
-        await lutsReady(params);
-        st.renderer.render(params, { maxSize: max });
-        return createImageBitmap(st.canvas);
+        // Post has its own drawing progress. RAW status messages from every
+        // sidebar tile otherwise flicker across the top bar while browsing.
+        const img = await loadSource(app, { shoot, key }, source,
+          { full, quiet: true, background });
+        const rendered = renderQueue.then(async () => {
+          try {
+            if (!st.renderer) {
+              st.canvas = document.createElement('canvas');
+              st.renderer = new Renderer(st.canvas);
+            }
+            st.renderer.setImage(img);
+            await lutsReady(params);
+            st.renderer.render(params, { maxSize: max });
+            return createImageBitmap(st.canvas);
+          } finally {
+            release(img);
+          }
+        });
+        // All slide draws share one renderer and canvas. Keep the entire
+        // upload, LUT load and bitmap copy together for the right photo.
+        renderQueue = rendered.catch(() => {});
+        return rendered;
       })());
       // Exact-size renders follow the window size; keep only the latest few.
       if (size) {
@@ -131,7 +144,7 @@ export function createPost(app) {
     return [cx + (cw - w) * (cell.x + 1) / 2, cy + (ch - h) * (cell.y + 1) / 2, w, h];
   }
 
-  async function drawSlide(ctx, slide, W, H, full = false) {
+  async function drawSlide(ctx, slide, W, H, full = false, background = false) {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.fillStyle = st.post.bg;
@@ -144,7 +157,7 @@ export function createPost(app) {
         ctx.fillRect(...rect);
         continue;
       }
-      const img = await photo(cell.ref, full);
+      const img = await photo(cell.ref, full, null, background);
       ctx.save();
       ctx.beginPath();
       ctx.rect(...frameOf(cell, rect));
@@ -154,7 +167,7 @@ export function createPost(app) {
       // big render on a canvas skips some and breaks thin lines into dashes.
       const at = placement(img, cell, rect);
       const size = Math.round(Math.max(img.width, img.height) * at[2] / img.width);
-      ctx.drawImage(size < Math.max(img.width, img.height) ? await photo(cell.ref, full, size) : img, ...at);
+      ctx.drawImage(size < Math.max(img.width, img.height) ? await photo(cell.ref, full, size, background) : img, ...at);
       ctx.restore();
     }
     return rects;
@@ -167,19 +180,22 @@ export function createPost(app) {
     if (!st.post) return;
     const token = ++drawing;
     const slide = st.post.slides[st.sel];
+    if (!slide) return;
     const stage = $('#pstage');
     const [W, H] = slideSize();
     const fit = Math.min((stage.clientWidth - 40) / W, (stage.clientHeight - 40) / H);
     const dpr = devicePixelRatio || 1;
-    view.width = Math.round(W * fit * dpr);
-    view.height = Math.round(H * fit * dpr);
-    view.style.width = Math.round(W * fit) + 'px';
-    view.style.height = Math.round(H * fit) + 'px';
-    if (!slide) return;
+    const width = Math.round(W * fit * dpr), height = Math.round(H * fit * dpr);
     const off = document.createElement('canvas');
-    off.width = view.width; off.height = view.height;
+    off.width = width; off.height = height;
     const rects = await drawSlide(off.getContext('2d'), slide, off.width, off.height);
     if (token !== drawing) return;
+    // Resizing a canvas clears it. Wait until the replacement slide is ready
+    // so keyboard navigation never exposes a blank frame.
+    view.width = width;
+    view.height = height;
+    view.style.width = Math.round(W * fit) + 'px';
+    view.style.height = Math.round(H * fit) + 'px';
     const ctx = view.getContext('2d');
     ctx.drawImage(off, 0, 0);
     drawGuides(ctx, rects.map((r, i) => (slide.cells[i] ? frameOf(slide.cells[i], r) : r)), dpr);
@@ -259,23 +275,47 @@ export function createPost(app) {
 
   // Drawn offscreen and copied in only if no newer draw of the same slide
   // started meanwhile: overlapping draws used to leave a mix of old and new.
-  const thumbDraws = new Map();
+  const thumbDraws = new WeakMap();
+  let thumbObserver = null;
   async function drawThumb(i) {
     const c = document.querySelector(`#slides [data-id="${i}"] canvas`);
     if (!c) return;
     const token = (thumbDraws.get(c) || 0) + 1;
     thumbDraws.set(c, token);
-    const [W, H] = slideSize(150);
+    // The canvas is 150 CSS pixels wide on desktop (80 on narrow screens).
+    // Match the display's physical pixels so Retina tiles do not blur.
+    const scale = Math.min(devicePixelRatio || 1, 3);
+    const [W, H] = slideSize(Math.round((c.getBoundingClientRect().width || 150) * scale));
     const off = document.createElement('canvas');
     off.width = W; off.height = H;
-    await drawSlide(off.getContext('2d'), st.post.slides[i], W, H);
-    if (thumbDraws.get(c) !== token) return;
+    await drawSlide(off.getContext('2d'), st.post.slides[i], W, H, false, true);
+    if (!c.isConnected || thumbDraws.get(c) !== token) return;
     c.width = W; c.height = H;
     c.getContext('2d').drawImage(off, 0, 0);
   }
 
+  function refreshThumbs() {
+    const list = $('#slides');
+    thumbObserver?.disconnect();
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          observer.unobserve(entry.target);
+          drawThumb(Number(entry.target.dataset.id));
+        }
+      }, { root: list, rootMargin: '200px 0px' });
+      thumbObserver = observer;
+    } else thumbObserver = null;
+    for (const b of list.children) {
+      if (thumbObserver) thumbObserver.observe(b);
+      else drawThumb(Number(b.dataset.id));
+    }
+  }
+
   function paintSlides() {
     const list = $('#slides');
+    thumbObserver?.disconnect();
     list.innerHTML = '';
     st.post.slides.forEach((s, i) => {
       const b = document.createElement('button');
@@ -283,10 +323,13 @@ export function createPost(app) {
       b.dataset.id = String(i);
       b.draggable = true;
       b.innerHTML = `<span class="n">${i + 1}</span><canvas></canvas>`;
+      const canvas = b.querySelector('canvas');
+      canvas.width = 150;
+      canvas.height = slideSize(150)[1];
       b.addEventListener('click', () => { b.blur(); select(i); });
       list.appendChild(b);
-      drawThumb(i);
     });
+    refreshThumbs();
     const unused = st.items.filter(ref => !st.post.slides.some(s => s.cells.some(c => c.ref === ref)));
     $('#unused').hidden = !unused.length;
     $('#unusedList').innerHTML = unused.map(ref => `<button data-ref="${ref}" draggable="true" title="Click to add as a new slide, or drag onto a tile">${ref.split('/')[1]}</button>`).join('');
@@ -354,16 +397,24 @@ export function createPost(app) {
     draw();
   }
 
-  function select(i) {
-    st.sel = Math.max(0, Math.min(st.post.slides.length - 1, i));
+  function select(i, rebuild = false) {
+    const next = Math.max(0, Math.min(st.post.slides.length - 1, i));
+    if (!rebuild && next === st.sel) return;
+    st.sel = next;
     st.cell = 0;
-    paint();
+    if (rebuild) paintSlides();
+    else {
+      for (const b of $('#slides').children) b.classList.toggle('current', Number(b.dataset.id) === next);
+      $('#slides').querySelector(`[data-id="${next}"]`)?.scrollIntoView({ block: 'nearest' });
+    }
+    paintPanel();
+    draw();
   }
 
-  function changed(repaintPanel = true) {
+  function changed(repaintPanel = true, redrawThumb = true) {
     if (repaintPanel) paintPanel();
     draw();
-    drawThumb(st.sel);
+    if (redrawThumb) drawThumb(st.sel);
     clearTimeout(st.saveT);
     st.saveT = setTimeout(save, 500);
   }
@@ -439,6 +490,7 @@ export function createPost(app) {
   function setLayout(layout) {
     const slide = st.post.slides[st.sel];
     if (!slide) return;
+    const oldCount = st.post.slides.length;
     const n = LAYOUTS[layout].cells(LAYOUTS[layout].split?.[1]).length;
     const cells = slide.cells.filter(c => c.ref);
     // Photos that no longer fit move to their own slides right after, so none is lost.
@@ -458,8 +510,8 @@ export function createPost(app) {
     }
     st.post.slides.splice(st.sel + 1, 0, ...spill);
     st.cell = 0;
-    paintSlides();
-    changed();
+    if (st.post.slides.length !== oldCount) paintSlides();
+    changed(true, st.post.slides.length === oldCount);
   }
 
   function splitSlide() {
@@ -701,7 +753,7 @@ export function createPost(app) {
     const c = document.createElement('canvas'); c.width = c.height = 48;
     const ctx = c.getContext('2d', { willReadFrequently: true });
     for (const ref of st.items) {
-      ctx.drawImage(await photo(ref), 0, 0, 48, 48);
+      ctx.drawImage(await photo(ref, false, null, true), 0, 0, 48, 48);
       const d = ctx.getImageData(0, 0, 48, 48).data;
       for (let i = 0; i < d.length; i += 4) {
         const lab = srgbToLab([d[i], d[i + 1], d[i + 2]]), chroma = Math.hypot(lab[1], lab[2]);
@@ -732,8 +784,8 @@ export function createPost(app) {
     b.blur();
     st.post.bg = b.dataset.hex;
     for (const x of document.querySelectorAll('#swatches button')) x.setAttribute('aria-pressed', x === b);
-    paintSlides();
-    changed();
+    refreshThumbs();
+    changed(true, false);
   });
 
   // --- wiring --------------------------------------------------------------------
@@ -746,15 +798,15 @@ export function createPost(app) {
   for (const b of document.querySelectorAll('#layouts button')) {
     b.addEventListener('click', () => { b.blur(); setLayout(b.dataset.layout); });
   }
-  $('#pAspect').addEventListener('change', e => { e.target.blur(); st.post.aspect = e.target.value; paintSlides(); changed(); });
-  $('#pGap').addEventListener('input', e => { st.post.gap = +e.target.value; $('#pGapOut').value = Math.round(st.post.gap); paintSlides(); changed(false); });
+  $('#pAspect').addEventListener('change', e => { e.target.blur(); st.post.aspect = e.target.value; refreshThumbs(); changed(true, false); });
+  $('#pGap').addEventListener('input', e => { st.post.gap = +e.target.value; $('#pGapOut').value = Math.round(st.post.gap); refreshThumbs(); changed(false, false); });
   $('#pGap').addEventListener('change', e => e.target.blur());
-  $('#pBorder').addEventListener('change', e => { e.target.blur(); st.post.border = e.target.checked; paintSlides(); changed(); });
+  $('#pBorder').addEventListener('change', e => { e.target.blur(); st.post.border = e.target.checked; refreshThumbs(); changed(true, false); });
   $('#pBg').addEventListener('input', e => {
     st.post.bg = e.target.value;
     for (const x of document.querySelectorAll('#swatches button')) x.setAttribute('aria-pressed', x.dataset.hex === st.post.bg);
-    paintSlides();
-    changed(false);
+    refreshThumbs();
+    changed(false, false);
   });
   $('#pAdd').addEventListener('click', e => { e.target.blur(); addSlide(); });
   $('#pDelete').addEventListener('click', e => { e.target.blur(); deleteSlide(); });
@@ -788,7 +840,7 @@ export function createPost(app) {
     e.target.blur();
     if (!confirm('Go back to one photo per slide, in collection order? Your layouts will be lost.')) return;
     st.post = { ...st.post, slides: st.items.map(ref => ({ layout: 'single', cells: [cellOf(ref)] })) };
-    select(0);
+    select(0, true);
     changed();
   });
   $('#unusedList').addEventListener('click', e => {
@@ -836,7 +888,7 @@ export function createPost(app) {
       const empty = $('#postEmpty');
       if (!app.target) {
         empty.hidden = false;
-        empty.textContent = 'Pick a collection in "Add to" (or open one) to lay out its post.';
+        empty.textContent = 'Choose a collection in the Library (or open one) to lay out its post.';
         $('#postBody').hidden = true;
         return;
       }
@@ -854,7 +906,7 @@ export function createPost(app) {
       empty.hidden = !!c.items.length;
       empty.textContent = 'This collection is empty: add photos to it with S in the Library.';
       $('#postBody').hidden = !c.items.length;
-      if (c.items.length) select(Math.min(st.sel, st.post.slides.length - 1));
+      if (c.items.length) select(Math.min(st.sel, st.post.slides.length - 1), true);
       if (c.items.length) {
         const col = st.col;
         makeSwatches().then(list => { if (st.col === col) paintSwatches(list); });
@@ -865,8 +917,8 @@ export function createPost(app) {
       if (k === 'escape') return selectCell(-1);
       if (k === 'o') return cyclePref('studio.grid', ['off', 'thirds', 'fine']);
       if (k === 'x') return cyclePref('studio.crosshair', ['0', '1']);
-      if (k === 'arrowdown' || k === 'arrowright' || k === 'j') { e.preventDefault(); select(st.sel + 1); }
-      else if (k === 'arrowup' || k === 'arrowleft' || k === 'k') { e.preventDefault(); select(st.sel - 1); }
+      if (k === 'arrowdown' || k === 'arrowright' || k === 'j' || k === 'l') { e.preventDefault(); select(st.sel + 1); }
+      else if (k === 'arrowup' || k === 'arrowleft' || k === 'k' || k === 'h') { e.preventDefault(); select(st.sel - 1); }
     },
   };
 }

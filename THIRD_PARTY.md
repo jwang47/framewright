@@ -8,8 +8,9 @@ listed here; the root license does not replace them.
 `framewright/web/vendor/libraw/` contains LibRaw-Wasm **1.6.0** from
 [the npm release](https://registry.npmjs.org/libraw-wasm/1.6.0), built from
 [commit 32fd36a9883a10c1632bc20073f1ea88cc60487a](https://github.com/ybouane/LibRaw-Wasm/tree/32fd36a9883a10c1632bc20073f1ea88cc60487a).
-Its wrapper declares ISC. We removed only the source-map URL comments from
-`index.js` and `worker.js`; the `.wasm` matches the published binary byte for
+Its wrapper declares ISC. We maintain `index.js` locally to serialize requests,
+handle worker failures, and terminate requests that time out. We removed the
+source-map URL comment from `worker.js`; the `.wasm` matches the published binary byte for
 byte. The npm tarball SHA1 is `2e97e53979c8abbbb2230b7755f84bc296e28838`.
 
 The pinned upstream build recipe and Emscripten port definitions identify:

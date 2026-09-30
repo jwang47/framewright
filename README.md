@@ -52,6 +52,13 @@ Library selection is `--library`, then `$STUDIO_LIBRARY`, then saved config.
 There is no Git-checkout fallback. The importer and renderer use the same order;
 without a configured library they print a setup error.
 
+The server keeps an in-memory photo index for day counts, search and source
+lookups. The first request scans the library; subsequent requests reuse each
+day's file list. Directory, offload-manifest and storage-setting changes refresh
+affected days on the next lookup. Files modified in place are rechecked within
+30 seconds of subsequent use. Picks and recipes remain live reads. The index
+is rebuilt after a server restart and does not write into the photo library.
+
 Config lives at `$XDG_CONFIG_HOME/framewright/config.json` (default
 `~/.config/framewright/config.json`) on macOS/Linux, or
 `%APPDATA%/framewright/config.json` on Windows. `$STUDIO_CONFIG` overrides the

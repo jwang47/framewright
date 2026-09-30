@@ -11,7 +11,7 @@
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="library" aria-selected="true">Library <kbd>G</kbd></button>
     <button role="tab" data-tab="develop" aria-selected="false">Develop <kbd>D</kbd></button>
-    <button role="tab" data-tab="post" aria-selected="false">Post</button>
+    <button role="tab" data-tab="post" aria-selected="false" aria-keyshortcuts="P">Post <kbd>P</kbd></button>
   </nav>
   <select id="shoot" aria-label="Collection or day"></select>
   <div class="search">
@@ -75,7 +75,7 @@
 
 <section id="library" class="tab" role="tabpanel">
   <div class="toolbar">
-    <select id="filter" aria-label="Show">
+    <select id="filter" aria-label="Show" title="Cycle All, Picks and Collection (O); toggle Picks (F)" aria-keyshortcuts="O F">
       <option value="all">All photos</option>
       <option value="picks">Picks (F)</option>
       <option value="post" hidden></option>
@@ -86,27 +86,53 @@
     <span class="chosen-n" id="chosenN" hidden></span>
     <button id="loupeBtn" aria-pressed="true">Preview <kbd>E</kbd></button>
     <span class="colctl">
-      <label for="target">Add to</label>
+      <label for="target">Collection</label>
       <select id="target" aria-label="Target collection"></select>
       <button id="newCol" title="New collection">New</button>
       <button id="renameCol" title="Rename the target collection">Rename</button>
       <button id="deleteCol" title="Delete the target collection (photos stay)">Delete</button>
     </span>
-    <span class="hint">Arrows move · Space pick · S add to collection · O its order (drag or [ ] to reorder) · D develop</span>
+    <details class="shortcut-help">
+      <summary>Shortcuts</summary>
+      <div class="shortcut-list">
+        <kbd>H J K L / arrows</kbd><span>Move between photos</span>
+        <kbd>Space</kbd><span>Pick / unpick</span>
+        <kbd>S</kbd><span>Add to / remove from collection</span>
+        <kbd>O</kbd><span>Cycle All / Picks / Collection</span>
+        <kbd>[ ] / drag</kbd><span>Reorder collection</span>
+        <kbd>G / D / P</kbd><span>Library / Develop / Post</span>
+        <kbd>I / V</kbd><span>Inspect at 1:1 / highlight fine edges</span>
+      </div>
+    </details>
   </div>
   <div class="lib">
     <main id="list" class="grid"></main>
     <aside class="loupe" id="loupe">
-      <div class="loupe-stage" id="loupeStage"><canvas id="loupeView"></canvas></div>
+      <div class="loupe-stage" id="loupeStage">
+        <canvas id="loupeView" role="button" tabindex="0" aria-label="Photo preview. Click to zoom in; drag to pan when zoomed."></canvas>
+        <canvas id="loupeEdges" aria-hidden="true" hidden></canvas>
+        <div class="loupe-zoom-tools" aria-label="Photo zoom controls">
+          <button id="loupeOut" aria-label="Zoom out" title="Zoom out">−</button>
+          <span id="loupeZoomLevel">Fit</span>
+          <button id="loupeIn" aria-label="Zoom in" title="Zoom in">+</button>
+          <button id="loupeFit" title="Fit photo in preview">Fit</button>
+          <button id="loupePixels" data-hotkey="I" aria-keyshortcuts="I" aria-pressed="false" title="Inspect at one image pixel per screen pixel (I)">1:1</button>
+          <button id="loupeEdgeToggle" data-hotkey="V" aria-keyshortcuts="V" aria-pressed="false" title="Highlight fine local edges; not a sharpness score (V)">Edges</button>
+        </div>
+        <span id="loupeZoomStatus" class="loupe-zoom-status" hidden></span>
+        <button id="loupeMinimap" class="loupe-minimap" aria-label="Photo minimap. Click or drag to pan." title="Click or drag to pan" hidden>
+          <canvas id="loupeMap"></canvas><span id="loupeMapBox"></span>
+        </button>
+      </div>
       <div class="loupe-bar">
         <span class="name" id="loupeName"></span>
         <span id="loupeTime"></span>
         <span class="tag" id="loupeTag"></span>
-        <button id="loupePick">☆ Pick</button>
-        <button id="loupeSel" hidden>Add to post</button>
-        <button id="loupeSync" hidden title="Copy this frame's look and settings to every chosen frame (⌘⇧S)"></button>
-        <button id="loupeDev">Develop</button>
-        <button id="loupeFs" title="Fullscreen (⇧F)" aria-label="Fullscreen">⤢</button>
+        <button id="loupePick" data-hotkey="Space" aria-keyshortcuts="Space">☆ Pick</button>
+        <button id="loupeSel" data-hotkey="S" aria-keyshortcuts="S" hidden>Add to collection</button>
+        <button id="loupeSync" data-hotkey="⌘⇧S" aria-keyshortcuts="Meta+Shift+S Control+Shift+S" hidden title="Copy this frame's look and settings to every chosen frame (⌘⇧S)"></button>
+        <button id="loupeDev" data-hotkey="D" aria-keyshortcuts="D">Develop</button>
+        <button id="loupeFs" data-hotkey="⇧F" aria-keyshortcuts="Shift+F" title="Fullscreen (⇧F)" aria-label="Fullscreen">⤢</button>
       </div>
     </aside>
   </div>
@@ -115,6 +141,14 @@
 <section id="develop" class="tab" role="tabpanel" hidden>
   <div class="dev">
     <div class="stage" id="stage">
+      <img id="devQuick" class="dev-quick" alt="Camera JPEG preview while RAW develops" hidden>
+      <span id="devQuickStatus" class="dev-quick-status" hidden></span>
+      <div class="dev-zoom-tools" aria-label="Develop zoom controls">
+        <button id="devZoomOut" aria-keyshortcuts="-" aria-label="Zoom out" title="Zoom out (-)">−</button>
+        <span id="devZoomLevel">Fit</span>
+        <button id="devZoomIn" aria-keyshortcuts="+" aria-label="Zoom in" title="Zoom in (+)">+</button>
+        <button id="devZoomFit" data-hotkey="0" aria-keyshortcuts="0" title="Fit photo (0)">Fit</button>
+      </div>
       <div class="wrap" id="wrap">
         <canvas id="view"></canvas>
         <canvas id="clipView" hidden></canvas>
@@ -129,8 +163,11 @@
           <i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i>
         </div>
       </div>
+      <button id="devMinimap" class="dev-minimap" aria-label="Photo minimap. Click or drag to pan." title="Click or drag to pan" hidden>
+        <canvas id="devMap"></canvas><span id="devMapBox"></span>
+      </button>
       <div class="badge" id="badge" hidden>Before</div>
-      <button class="fs-btn" id="devFs" title="Fullscreen (⇧F)" aria-label="Fullscreen">⤢</button>
+      <button class="fs-btn" id="devFs" data-hotkey="⇧F" aria-keyshortcuts="Shift+F" title="Fullscreen (⇧F)" aria-label="Fullscreen">⤢</button>
       <div class="proposal" id="proposal" hidden>
         <div class="proposal-head"><strong>Proposed edit</strong> <span id="proposalNote"></span></div>
         <div class="proposal-actions">
@@ -187,18 +224,18 @@
           <option value="0.8">4:5</option>
           <option value="0.5625">9:16</option>
         </select>
-        <button id="cropBtn" aria-pressed="false">Crop</button>
+        <button id="cropBtn" data-hotkey="R" aria-keyshortcuts="R" aria-pressed="false">Crop</button>
         <button id="cropReset">Reset</button>
       </div>
       <div class="row">
-        <button id="gridBtn" aria-pressed="false" title="Cycle grid overlay (O)">Grid: off</button>
-        <button id="crossBtn" aria-pressed="false" title="Centre crosshair (X)">Crosshair</button>
+        <button id="gridBtn" data-hotkey="O" aria-keyshortcuts="O" aria-pressed="false" title="Cycle grid overlay (O)">Grid: off</button>
+        <button id="crossBtn" data-hotkey="X" aria-keyshortcuts="X" aria-pressed="false" title="Centre crosshair (X)">Crosshair</button>
       </div>
       <label class="check"><input type="checkbox" id="lensOn"> Lens profile <span id="lensInfo"></span></label>
       <div id="sliders-geo"></div>
       <div class="row turn-row">
-        <button data-turn="ccw" title="Turn left 90° (⌘[)" aria-label="Turn left 90°">⟲ 90°</button>
-        <button data-turn="cw" title="Turn right 90° (⌘])" aria-label="Turn right 90°">⟳ 90°</button>
+        <button data-turn="ccw" data-hotkey="⌘[" aria-keyshortcuts="Meta+[ Control+[" title="Turn left 90° (⌘[)" aria-label="Turn left 90°">⟲ 90°</button>
+        <button data-turn="cw" data-hotkey="⌘]" aria-keyshortcuts="Meta+] Control+]" title="Turn right 90° (⌘])" aria-label="Turn right 90°">⟳ 90°</button>
         <button data-turn="180" title="Turn 180°">180°</button>
         <button data-turn="flipH" title="Mirror left–right" aria-label="Mirror left–right">⇋ Flip</button>
         <button data-turn="flipV" title="Mirror top–bottom" aria-label="Mirror top–bottom">⇵ Flip</button>
@@ -243,9 +280,9 @@
         <button id="addLinear">+ Linear</button>
         <button id="addRadial">+ Radial</button>
         <button id="addRect">+ Rect</button>
-        <button id="addSubject" title="Brush over a subject; the mask finds its edges (B)">+ Subject</button>
-        <button id="maskShow" aria-pressed="false" title="Show the selected mask in red (M)">Show</button>
-        <button id="maskAll" aria-pressed="false" title="Preview with or without all masks (Shift+M)">Masks: on</button>
+        <button id="addSubject" title="Create a subject mask, then use Brush (B) to paint it">+ Subject</button>
+        <button id="maskShow" data-hotkey="M" aria-keyshortcuts="M" aria-pressed="false" title="Show the selected mask in red (M)">Show</button>
+        <button id="maskAll" data-hotkey="⇧M" aria-keyshortcuts="Shift+M" aria-pressed="false" title="Preview with or without all masks (Shift+M)">Masks: on</button>
       </div>
       <div id="maskList"></div>
       <div id="maskEdit" hidden>
@@ -269,8 +306,8 @@
       </div>
 
       <div class="actions">
-        <button id="copyBtn" title="Copy settings (⌘C)">Copy</button>
-        <button id="pasteBtn" title="Paste settings except crop (⌘V)">Paste</button>
+        <button id="copyBtn" data-hotkey="⌘C" aria-keyshortcuts="Meta+C Control+C" title="Copy settings (⌘C)">Copy</button>
+        <button id="pasteBtn" data-hotkey="⌘V" aria-keyshortcuts="Meta+V Control+V" title="Paste settings except crop (⌘V)">Paste</button>
         <button id="resetBtn" title="Reset all (undo with ⌘Z)">Reset</button>
       </div>
       <div class="actions out-row">
@@ -284,10 +321,10 @@
         <button id="dSend" title="Export, then send to this destination">Send to</button>
         <select id="dDevice" aria-label="Send destination"></select>
       </div>
-      <p class="hint">O grid · X crosshair · M mask overlay · C clipping · ⇧M all masks · \ before/after · ←/→ frames · ⌘Z undo · double-click a slider to reset it</p>
+      <p class="hint">O grid · X crosshair · M mask overlay · C clipping · ⇧M all masks · \ before/after · H/L or ←/→ frames · +/− zoom · 0 fit · ⌘Z undo · double-click a slider to reset it</p>
     </aside>
+    <div class="strip" id="strip"></div>
   </div>
-  <div class="strip" id="strip"></div>
 </section>
 
 <section id="post" class="tab" role="tabpanel" hidden>
@@ -303,7 +340,7 @@
     </div>
     <div class="pstage" id="pstage">
       <canvas id="slideView"></canvas>
-      <button class="fs-btn" id="postFs" title="Fullscreen (⇧F)" aria-label="Fullscreen">⤢</button>
+      <button class="fs-btn" id="postFs" data-hotkey="⇧F" aria-keyshortcuts="Shift+F" title="Fullscreen (⇧F)" aria-label="Fullscreen">⤢</button>
     </div>
     <aside class="panel" id="ppanel">
       <h3>Post</h3>
@@ -328,14 +365,14 @@
       <div class="swatches" id="swatches" aria-label="Background colours from these photos"></div>
 
       <div class="row">
-        <button id="pGrid" aria-pressed="false" title="Grid in each tile (O)">Grid: off</button>
-        <button id="pCross" aria-pressed="false" title="Crosshair in each tile (X)">Crosshair</button>
+        <button id="pGrid" data-hotkey="O" aria-keyshortcuts="O" aria-pressed="false" title="Grid in each tile (O)">Grid: off</button>
+        <button id="pCross" data-hotkey="X" aria-keyshortcuts="X" aria-pressed="false" title="Crosshair in each tile (X)">Crosshair</button>
       </div>
 
       <h3 id="slideTitle">Slide</h3>
       <div class="layouts" id="layouts"></div>
       <div id="cells"></div>
-      <p class="hint">Drag in a photo to reposition it; drag it onto another tile to swap them, or drag a photo from below the slides onto a tile. Drag the line between the big tile and the rest to resize. Pinch or ctrl-scroll to zoom. Click the selected tile again, the gap, or Esc to deselect. Fill → Square → Whole: Square shows a square crop in the middle of the tile, Whole the full photo, both with the background around them.</p>
+      <p class="hint">H/L or arrows switch slides. Drag in a photo to reposition it; drag it onto another tile to swap them, or drag a photo from below the slides onto a tile. Drag the line between the big tile and the rest to resize. Pinch or ctrl-scroll to zoom. Click the selected tile again, the gap, or Esc to deselect. Fill → Square → Whole: Square shows a square crop in the middle of the tile, Whole the full photo, both with the background around them.</p>
       <div class="actions">
         <button id="pAdd">+ Slide</button>
         <button id="pSplit" title="One slide per photo in this collage">Split</button>

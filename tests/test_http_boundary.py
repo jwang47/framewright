@@ -12,6 +12,29 @@ from framewright.render import RenderHandler
 
 
 class HTTPBoundaryTests(unittest.TestCase):
+    def test_day_counts_include_offline_frames_and_count_raw_jpeg_pairs_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            day = root / '2026-01-01_camera'
+            (day / 'raw').mkdir(parents=True)
+            for name in ('pair.JPG', 'pair.DNG', 'jpeg.JPG', 'raw.DNG'):
+                (day / 'raw' / name).write_bytes(b'synthetic')
+            (day / 'store.json').write_text(json.dumps({'files': {
+                'raw/offline.DNG': {'mtime': 1, 'size': 8},
+                'raw/offline.JPG': {'mtime': 1, 'size': 8},
+            }}))
+
+            class TestHandler(Handler):
+                pass
+
+            TestHandler.root = root
+            server = self.start(TestHandler)
+            status, body = self.request(server, 'GET', '/api/shoots')
+            self.assertEqual(status, 200)
+            data = json.loads(body)
+            self.assertEqual(data['shoots'], [day.name])
+            self.assertEqual(data['shootCounts'], {day.name: 4})
+
     def start(self, handler):
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)

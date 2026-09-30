@@ -63,6 +63,8 @@ export function createDevelop(app) {
     shownSource: null, srcToken: 0, legacy: false,
     rev: null, saving: false,   // the recipe's revision on the server; a save in flight
   };
+  const zoom = { factor: 1, panX: 0, panY: 0, fitW: 0, fitH: 0,
+    fullRequested: false, fullReady: false, drag: null, mapDrag: false };
 
   // --- sliders ---------------------------------------------------------------
 
@@ -1198,6 +1200,127 @@ export function createDevelop(app) {
 
   // --- rendering ---------------------------------------------------------------
 
+  function resetZoom() {
+    zoom.factor = 1;
+    zoom.panX = zoom.panY = 0;
+    zoom.fullRequested = zoom.fullReady = false;
+    zoom.drag = null;
+    zoom.mapDrag = false;
+    $('#wrap').style.transform = '';
+    $('#devMinimap').hidden = true;
+    paintZoomControls();
+  }
+
+  function paintZoomControls() {
+    $('#devZoomLevel').textContent = zoom.factor === 1 ? 'Fit' : `${zoom.factor}×`;
+    const ready = !!st.key && !st.opening && !!renderer;
+    $('#devZoomOut').disabled = !ready || zoom.factor === 1;
+    $('#devZoomIn').disabled = !ready || zoom.factor === 4 || st.cropMode;
+    $('#devZoomFit').disabled = !ready || zoom.factor === 1;
+    view.classList.toggle('zoomed', zoom.factor > 1 && !st.cropMode && !st.picking && !st.brush.on);
+    $('#devMinimap').hidden = !ready || zoom.factor === 1;
+  }
+
+  function clampZoomPan() {
+    const stage = $('#stage');
+    const x = Math.max(0, (zoom.fitW * zoom.factor - (stage.clientWidth - 32)) / 2);
+    const y = Math.max(0, (zoom.fitH * zoom.factor - (stage.clientHeight - 32)) / 2);
+    zoom.panX = Math.max(-x, Math.min(x, zoom.panX));
+    zoom.panY = Math.max(-y, Math.min(y, zoom.panY));
+  }
+
+  function applyZoomPan() {
+    clampZoomPan();
+    $('#wrap').style.transform = zoom.factor === 1 ? ''
+      : `translate(${zoom.panX}px, ${zoom.panY}px) scale(${zoom.factor})`;
+    paintZoomBox();
+  }
+
+  function setZoom(next, point = null) {
+    if (!st.key || st.opening || st.cropMode) return;
+    const old = zoom.factor;
+    next = Math.max(1, Math.min(4, next));
+    if (next === old) return;
+    if (point) {
+      const rect = $('#stage').getBoundingClientRect();
+      const dx = point.clientX - rect.left - rect.width / 2;
+      const dy = point.clientY - rect.top - rect.height / 2;
+      zoom.panX = dx - (dx - zoom.panX) * next / old;
+      zoom.panY = dy - (dy - zoom.panY) * next / old;
+    } else {
+      zoom.panX *= next / old;
+      zoom.panY *= next / old;
+    }
+    zoom.factor = next;
+    if (next === 1) zoom.panX = zoom.panY = 0;
+    draw();
+    if (next > 1) loadFullForZoom();
+  }
+
+  async function loadFullForZoom() {
+    if (zoom.fullRequested || !st.key || zoom.factor === 1 || !st.shownSource) return;
+    zoom.fullRequested = true;
+    const key = st.key, source = st.shownSource, opened = st.loadToken, srcToken = st.srcToken;
+    const stale = () => key !== st.key || opened !== st.loadToken || srcToken !== st.srcToken || source !== st.shownSource;
+    const status = $('#devQuickStatus');
+    status.textContent = 'Loading full detail…';
+    status.hidden = false;
+    try {
+      const img = await loadSource(app, app.frame(key), source,
+        { full: true, quiet: true, background: true, keep: false, stale });
+      if (!img || stale()) return release(img);
+      renderer.setImage(img);
+      st.bw = img.width; st.bh = img.height;
+      st.dngLens = !!img.warp;
+      release(img);
+      zoom.fullReady = true;
+      syncSize();
+      draw();
+      status.hidden = true;
+    } catch {
+      if (!stale()) {
+        zoom.fullRequested = false;
+        status.textContent = 'Full detail unavailable';
+      }
+    }
+  }
+
+  function paintZoomMap() {
+    const map = $('#devMinimap'), canvas = $('#devMap');
+    if (zoom.factor === 1 || !view.width || !view.height) { map.hidden = true; return; }
+    const s = Math.min(160 / view.width, 120 / view.height);
+    canvas.width = Math.max(1, Math.round(view.width * s));
+    canvas.height = Math.max(1, Math.round(view.height * s));
+    canvas.style.width = canvas.width + 'px';
+    canvas.style.height = canvas.height + 'px';
+    canvas.getContext('2d').drawImage(view, 0, 0, canvas.width, canvas.height);
+    map.hidden = false;
+    paintZoomBox();
+  }
+
+  function paintZoomBox() {
+    if (zoom.factor === 1) return;
+    const stage = $('#stage'), map = $('#devMap'), box = $('#devMapBox');
+    const imageW = zoom.fitW * zoom.factor, imageH = zoom.fitH * zoom.factor;
+    if (!map.clientWidth || !imageW || !imageH) return;
+    const w = Math.min(1, stage.clientWidth / imageW);
+    const h = Math.min(1, stage.clientHeight / imageH);
+    const cx = 0.5 - zoom.panX / imageW, cy = 0.5 - zoom.panY / imageH;
+    box.style.width = w * map.clientWidth + 'px';
+    box.style.height = h * map.clientHeight + 'px';
+    box.style.left = Math.max(0, Math.min(1 - w, cx - w / 2)) * map.clientWidth + 'px';
+    box.style.top = Math.max(0, Math.min(1 - h, cy - h / 2)) * map.clientHeight + 'px';
+  }
+
+  function panFromZoomMap(e) {
+    const rect = $('#devMap').getBoundingClientRect();
+    const u = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const v = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    zoom.panX = (0.5 - u) * zoom.fitW * zoom.factor;
+    zoom.panY = (0.5 - v) * zoom.fitH * zoom.factor;
+    applyZoomPan();
+  }
+
   function draw() {
     if (st.rafPending) return;
     st.rafPending = true;
@@ -1205,7 +1328,7 @@ export function createDevelop(app) {
       st.rafPending = false;
       if (!renderer || !st.W) return;
       const stage = $('#stage');
-      const maxSize = Math.max(stage.clientWidth, stage.clientHeight) * (devicePixelRatio || 1);
+      const maxSize = Math.max(stage.clientWidth, stage.clientHeight) * (devicePixelRatio || 1) * zoom.factor;
       const showMask = (st.showMask || st.handleDrag || st.brush.on) && !st.cropMode ? st.maskSel : -1;
       if (st.before || st.compare === 'original') renderer.render(normalize(), { maxSize });
       else if (st.compare === 'proposed' && st.proposal) renderer.render(st.proposal.params, { maxSize });
@@ -1226,6 +1349,7 @@ export function createDevelop(app) {
       histogram();
       paintClip();
       paintReadout();
+      paintZoomMap();
     });
   }
 
@@ -1235,6 +1359,10 @@ export function createDevelop(app) {
     const s = Math.min(availW / view.width, availH / view.height);
     view.style.width = Math.floor(view.width * s) + 'px';
     view.style.height = Math.floor(view.height * s) + 'px';
+    zoom.fitW = view.width * s;
+    zoom.fitH = view.height * s;
+    applyZoomPan();
+    paintZoomControls();
   }
   new ResizeObserver(() => st.key && draw()).observe($('#stage'));
 
@@ -1384,6 +1512,7 @@ export function createDevelop(app) {
   }
 
   function setCropMode(on) {
+    if (on) resetZoom();
     st.cropMode = on;
     $('#cropBtn').setAttribute('aria-pressed', on);
     $('#cropBtn').textContent = on ? 'Done' : 'Crop';
@@ -1557,6 +1686,48 @@ export function createDevelop(app) {
   view.addEventListener('click', e => { if (st.picking && renderer) pickNeutral(e); });
   $('#wbPick').addEventListener('click', e => { e.target.blur(); setPicking(!st.picking); });
 
+  $('#devZoomIn').addEventListener('click', e => { e.currentTarget.blur(); setZoom(zoom.factor + 1); });
+  $('#devZoomOut').addEventListener('click', e => { e.currentTarget.blur(); setZoom(zoom.factor - 1); });
+  $('#devZoomFit').addEventListener('click', e => { e.currentTarget.blur(); setZoom(1); });
+  $('#stage').addEventListener('wheel', e => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    setZoom(zoom.factor + (e.deltaY < 0 ? 1 : -1), e);
+  }, { passive: false });
+  view.addEventListener('pointerdown', e => {
+    if (zoom.factor === 1 || st.cropMode || st.picking || st.brush.on) return;
+    e.preventDefault();
+    view.setPointerCapture(e.pointerId);
+    zoom.drag = { x: e.clientX, y: e.clientY };
+    view.classList.add('panning');
+  });
+  view.addEventListener('pointermove', e => {
+    if (!zoom.drag) return;
+    zoom.panX += e.clientX - zoom.drag.x;
+    zoom.panY += e.clientY - zoom.drag.y;
+    zoom.drag.x = e.clientX; zoom.drag.y = e.clientY;
+    applyZoomPan();
+  });
+  for (const type of ['pointerup', 'pointercancel']) view.addEventListener(type, () => {
+    zoom.drag = null;
+    view.classList.remove('panning');
+  });
+  $('#devMinimap').addEventListener('pointerdown', e => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    zoom.mapDrag = true;
+    panFromZoomMap(e);
+  });
+  $('#devMinimap').addEventListener('pointermove', e => { if (zoom.mapDrag) panFromZoomMap(e); });
+  for (const type of ['pointerup', 'pointercancel']) $('#devMinimap').addEventListener(type, () => { zoom.mapDrag = false; });
+  $('#devMinimap').addEventListener('keydown', e => {
+    const step = { ArrowLeft: [-40, 0], ArrowRight: [40, 0], ArrowUp: [0, -40], ArrowDown: [0, 40] }[e.key];
+    if (!step) return;
+    e.preventDefault(); e.stopPropagation();
+    zoom.panX -= step[0]; zoom.panY -= step[1];
+    applyZoomPan();
+  });
+
   // --- frames ------------------------------------------------------------------
 
   // The frames worth flipping between: the target collection in its order,
@@ -1603,7 +1774,7 @@ export function createDevelop(app) {
   async function open(id) {
     const f = app.frame(id);
     if (!f) return;
-    if (id === st.key && renderer) { paintStrip(); draw(); return; }
+    if (id === st.key && renderer && !st.opening) { paintStrip(); draw(); return; }
     await flush();
     const token = ++st.loadToken;
     app.focusKey = id;
@@ -1613,27 +1784,58 @@ export function createDevelop(app) {
     // no source badge, and no switching.
     st.opening = true;
     st.shownSource = null;
+    resetZoom();
+    const quick = $('#devQuick'), quickStatus = $('#devQuickStatus');
+    quick.onload = quick.onerror = null;
+    quick.removeAttribute('src');
+    quick.hidden = true;
+    quickStatus.hidden = true;
+    $('#wrap').hidden = true;
+    $('#devEmpty').textContent = `Loading ${f.key}…`;
+    $('#devEmpty').hidden = false;
     paintBadge(f, null);
     paintSource();
     $('#devName').textContent = app.isCollection() ? `${app.shootDate(f.shoot)} · ${f.key}` : f.key;
     paintStrip();
     const q = `shoot=${encodeURIComponent(f.shoot)}&key=${f.key}`;
-    const [edit, prop] = await Promise.all([
-      fetch(`/api/edit?${q}`).then(r => r.json()),
-      fetch(`/api/proposal?${q}`).then(r => r.json()),
-    ]);
-    if (token !== st.loadToken) return;
-    const source = sourceOf(f, edit.params);
-    paintBadge(f, source);
-    let lens;
+    let edit, prop, source, lens;
     try {
+      const read = async url => {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`Could not load photo settings (${r.status})`);
+        return r.json();
+      };
+      [edit, prop] = await Promise.all([
+        read(`/api/edit?${q}`), read(`/api/proposal?${q}`),
+      ]);
+      if (token !== st.loadToken) return;
+      source = sourceOf(f, edit.params);
+      paintBadge(f, source);
+      if (source === 'raw') {
+        // Show the camera JPEG while the RAW worker decodes the actual pixels.
+        // The load token keeps a late JPEG from covering a newer frame.
+        quick.onload = () => {
+          if (token !== st.loadToken || !st.opening) return;
+          quick.hidden = false;
+          $('#devEmpty').hidden = true;
+          quickStatus.textContent = 'JPEG preview · decoding RAW…';
+          quickStatus.hidden = false;
+        };
+        quick.src = app.src('preview', f);
+      }
       [, lens] = await Promise.all([
-        showImage(f, source, () => token !== st.loadToken),
-        fetch(`/api/lens?${q}&source=${source}`).then(r => r.json()),
+        showImage(f, source, () => token !== st.loadToken, source === 'raw'),
+        read(`/api/lens?${q}&source=${source}`),
       ]);
     } catch (e) {
       if (token !== st.loadToken) return;
-      app.status(`couldn't open ${f.key} from the ${SOURCE_LABEL[source]}: ${e.message}`, 0);
+      const message = `Couldn't open ${f.key}${source ? ` from the ${SOURCE_LABEL[source]}` : ''}: ${e.message}`;
+      app.status(message, 0);
+      if (!quick.hidden) {
+        quickStatus.textContent = 'RAW unavailable · JPEG preview. Click the thumbnail to retry.';
+      } else {
+        $('#devEmpty').textContent = message + '. Click the thumbnail to retry.';
+      }
       st.key = null;   // the sliders still hold the last frame: never save them onto this one
       st.opening = false;
       return;
@@ -1661,6 +1863,8 @@ export function createDevelop(app) {
     $('#aspect').value = 'free';
     setCropMode(false);
     paintSliders();
+    quick.hidden = true;
+    quickStatus.hidden = true;
     $('#devEmpty').hidden = true;
     $('#wrap').hidden = false;
     draw();
@@ -1670,13 +1874,14 @@ export function createDevelop(app) {
 
   // Put the frame's RAW or JPEG into the renderer. Throws if it can't be
   // loaded; resolves false if stale() says a newer load has taken over.
-  async function showImage(f, source, stale) {
-    const img = await loadSource(app, f, source, { stale });
+  async function showImage(f, source, stale, quiet = false) {
+    const img = await loadSource(app, f, source, { stale, quiet, background: false });
     if (!img || stale()) { release(img); return false; }
     if (!renderer) { renderer = new Renderer(view); renderer.onLutLoad = draw; }
     renderer.setImage(img);
     st.bw = img.width; st.bh = img.height;
     st.shownSource = source;
+    zoom.fullRequested = zoom.fullReady = false;
     st.dngLens = !!img.warp;   // the DNG corrects its own lens: Lensfun stays out
     release(img);
     return true;
@@ -1700,6 +1905,7 @@ export function createDevelop(app) {
       syncSize();
       paintSliders();
       draw();
+      if (zoom.factor > 1) loadFullForZoom();
       app.status(`developing from the ${SOURCE_LABEL[source]}`);
     } catch (e) {
       if (stale()) return;
@@ -1883,14 +2089,17 @@ export function createDevelop(app) {
     if (k === '\\') {
       if (!e.repeat) { st.before = true; $('#badge').hidden = false; draw(); }
     } else if ((k === 'arrowup' || k === 'arrowdown') && st.active) { e.preventDefault(); nudgeActive(k === 'arrowup' ? 1 : -1, e); }
-    else if (k === 'arrowright' || k === 'j') { e.preventDefault(); step(1); }
-    else if (k === 'arrowleft' || k === 'k') { e.preventDefault(); step(-1); }
+    else if (k === 'arrowright' || k === 'j' || k === 'l') { e.preventDefault(); step(1); }
+    else if (k === 'arrowleft' || k === 'k' || k === 'h') { e.preventDefault(); step(-1); }
     else if (k === 'r') setCropMode(!st.cropMode);
     else if (k === 'w') setPicking(!st.picking);
     else if (st.proposal && ['1', '2', '3'].includes(k)) showCompare(['original', 'yours', 'proposed'][+k - 1]);
     else if (k === 'o') cycleGrid();
     else if (k === 'x') toggleCrosshair();
     else if (k === 'c') toggleClip();
+    else if (k === '=' || k === '+') { e.preventDefault(); setZoom(zoom.factor + 1); }
+    else if (k === '-' || k === '_') { e.preventDefault(); setZoom(zoom.factor - 1); }
+    else if (k === '0') { e.preventDefault(); setZoom(1); }
     else if (k === 'm' && e.shiftKey) toggleAllMasks();
     else if (k === 'm') { st.showMask = !st.showMask; paintMasks(); draw(); }
     else if (k === 'b' && mask()?.type === 'subject') setBrush(!st.brush.on);
@@ -1899,7 +2108,7 @@ export function createDevelop(app) {
     else if (k === 'escape' && st.picking) setPicking(false);
     else if ((k === 'enter' || k === 'escape') && st.cropMode) setCropMode(false);
     else if (k === 'escape' && st.active) activate(null);
-    else if (k === ' ' || k === 'p') { e.preventDefault(); if (st.key) app.togglePick(st.key); }
+    else if (k === ' ') { e.preventDefault(); if (st.key) app.togglePick(st.key); }
   }
 
   return {
@@ -1908,6 +2117,7 @@ export function createDevelop(app) {
     show(key) {
       const target = key || stripFrames()[0]?.id;
       if (!target) {
+        $('#devEmpty').textContent = 'Pick a frame in the Library, or choose one below.';
         $('#devEmpty').hidden = false;
         $('#wrap').hidden = true;
         return;
@@ -1918,6 +2128,7 @@ export function createDevelop(app) {
       st.key = null;
       st.W = 0;
       st.shownSource = null;
+      resetZoom();
       $('#strip').innerHTML = '';
     },
     paintStrip() { if (st.key) paintStrip(); },

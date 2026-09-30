@@ -26,9 +26,8 @@ export const onJpegWithRaw = (frame, params) => !!frame.raw && sourceOf(frame, p
 // (frames decoded ahead, the full-size redo, thumbnails, in that order of
 // priority) so that work never makes the screen wait. `stale` is asked when a
 // load's turn comes and while it decodes: a frame flown past is skipped or
-// stopped (null) rather than decoded for nothing. A decode that never
-// finishes holds the next one up for at most WAIT_MS, not forever.
-const WAIT_MS = 15000;
+// stopped (null) rather than decoded for nothing. The decoder terminates
+// unresponsive workers; never free a lane while its worker is still running.
 function lane() {
   const waiting = [];
   let busy = false;
@@ -38,8 +37,7 @@ function lane() {
     const top = Math.max(...waiting.map(w => w.priority));
     const { job, resolve, reject } = waiting.splice(waiting.findIndex(w => w.priority === top), 1)[0];
     let done = false;
-    const free = () => { if (!done) { done = true; clearTimeout(timer); busy = false; next(); } };
-    const timer = setTimeout(free, WAIT_MS);
+    const free = () => { if (!done) { done = true; busy = false; next(); } };
     Promise.resolve().then(job).then(resolve, reject).finally(free);
   }
   return (job, priority = 0) => new Promise((resolve, reject) => { waiting.push({ job, priority, resolve, reject }); next(); });

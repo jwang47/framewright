@@ -83,6 +83,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .luts import HASH_PATTERN, MAX_LUT_BYTES, install_lut, lut_hash, valid_name
+from .photo_index import PhotoIndex
 from .lenses import profile_for  # noqa: E402
 from .settings import lut_directories, user_lut_directory  # noqa: E402
 from .import_photos import (  # noqa: E402
@@ -224,7 +225,7 @@ _write_lock = threading.Lock()
 # --- library -----------------------------------------------------------------
 
 
-def image_files(shoot_dir: Path) -> dict[Path, float]:
+def _scan_image_files(shoot_dir: Path) -> dict[Path, float]:
     """A shoot's images -> capture time: those in its raw/, then those on
     the external store (store.py), listed whether the drive is in or not."""
     out = {}
@@ -239,6 +240,17 @@ def image_files(shoot_dir: Path) -> dict[Path, float]:
         if name not in names and path.suffix.lower() in IMAGE_EXTS:
             out[path] = mtime
     return out
+
+
+_photo_index = PhotoIndex(_scan_image_files, frame_key, RAW_EXTS, JPEG_EXTS)
+
+
+def photo_snapshot(shoot_dir: Path):
+    return _photo_index.get(shoot_dir, configured_store())
+
+
+def image_files(shoot_dir: Path):
+    return photo_snapshot(shoot_dir).files
 
 
 def shot_time(src: Path, shoot_dir: Path) -> float:
@@ -271,8 +283,9 @@ def list_shoots(root: Path) -> list[str]:
     shoots = [
         d.name for d in root.iterdir()
         if d.is_dir() and (d / "raw").is_dir()
-        and (any(f.suffix.lower() in IMAGE_EXTS for f in (d / "raw").iterdir()) or read_manifest(d))
+        and (photo_snapshot(d).sources or read_manifest(d))
     ]
+    _photo_index.retain(root, shoots)
     return sorted(shoots, key=lambda name: (shoot_date(name), name), reverse=True)
 
 
@@ -288,20 +301,14 @@ def default_source(has_raw: bool) -> str:
     return "raw" if has_raw else "jpeg"
 
 
-def raw_sources(shoot_dir: Path) -> dict[str, Path]:
+def raw_sources(shoot_dir: Path):
     """Frame key -> its raw file, for the frames that have one."""
-    return {frame_key(f): f for f in image_files(shoot_dir) if f.suffix.lower() in RAW_EXTS}
+    return photo_snapshot(shoot_dir).raws
 
 
-def frame_sources(shoot_dir: Path) -> dict[str, Path]:
+def frame_sources(shoot_dir: Path):
     """Frame key -> the file to render it from, preferring the camera JPEG."""
-    sources: dict[str, Path] = {}
-    for f in image_files(shoot_dir):
-        ext = f.suffix.lower()
-        key = frame_key(f)
-        if key not in sources or ext in JPEG_EXTS:
-            sources[key] = f
-    return sources
+    return photo_snapshot(shoot_dir).sources
 
 
 def atomic_write(path: Path, text: str) -> None:
@@ -1176,8 +1183,10 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "shoots"]:
             with _write_lock:
                 collections = read_collections(self.root)
+            shoots = list_shoots(self.root)
             self.send_json({
-                "shoots": list_shoots(self.root),
+                "shoots": shoots,
+                "shootCounts": {shoot: len(frame_sources(self.root / shoot)) for shoot in shoots},
                 "collections": [
                     {"name": c["name"], "slug": slugify(c["name"]), "days": c.get("days"),
                      "shoots": collection_shoots(self.root, c), "items": len(c.get("items", []))}
@@ -1318,9 +1327,9 @@ class Handler(BaseHTTPRequestHandler):
             self.warmed.add(shoot)
             threading.Thread(target=warm_previews, args=(self.root, shoot), daemon=True).start()
         picks = read_picks(d)
-        raws = raw_sources(d)
-        times = image_files(d)
-        sources = sorted(frame_sources(d).items(), key=lambda kv: (times[kv[1]], kv[0]))
+        snapshot = photo_snapshot(d)
+        raws, times = snapshot.raws, snapshot.files
+        sources = sorted(snapshot.sources.items(), key=lambda kv: (times[kv[1]], kv[0]))
         def recipe(key: str) -> dict | None:
             path = edit_path(d, key)
             try:
@@ -1404,10 +1413,11 @@ class Handler(BaseHTTPRequestHandler):
                 name = key.lower()
                 if q in name or q in shoot.lower():
                     rank = 0 if name == q else 1 if name.startswith(q) or name.endswith(q) else 2
-                    hits.append((rank, shoot, key, edit_path(d, key).is_file()))
+                    hits.append((rank, shoot, key))
         hits.sort(key=lambda h: (h[0], [-ord(c) for c in h[1]], h[2]))
         self.send_json({"total": len(hits), "results": [
-            {"shoot": shoot, "key": key, "edited": edited} for _, shoot, key, edited in hits[:40]]})
+            {"shoot": shoot, "key": key, "edited": edit_path(self.root / shoot, key).is_file()}
+            for _, shoot, key in hits[:40]]})
 
     def api_frames(self, shoot: str) -> None:
         if self.shoot_dir(shoot) is None:

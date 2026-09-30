@@ -110,7 +110,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.resolve_library(), library)
         status, body = request("GET", "/api/shoots")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body), {"shoots": [], "collections": []})
+        self.assertEqual(json.loads(body), {"shoots": [], "shootCounts": {}, "collections": []})
         status, body = request("GET", "/api/offload")
         self.assertEqual(status, 200)
         self.assertFalse(json.loads(body)["configured"])

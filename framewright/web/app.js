@@ -10,7 +10,7 @@ import { createDevelop } from './develop.js';
 import { createPost } from './post.js';
 import { createFullscreen } from './fullscreen.js';
 import { createSync } from './sync.js';
-import { Renderer, loadBitmap, lutsReady } from './render.js';
+import { Renderer, loadBitmap, lutsReady, normalize, orientedSize } from './render.js';
 import { sourceOf, loadSource, prefetch, release, paintSourceTag, SOURCE_LABEL } from './source.js';
 
 const $ = s => document.querySelector(s);
@@ -125,6 +125,7 @@ export const app = {
         collection: this.target, shoot: f.shoot, key: f.key, selected: !f.selected,
       });
       this.applySelects(res.selects);
+      updateCollectionCount(this.target, res.selects.length);
       this.status(f.selected ? `added ${f.key} to ${name} as #${f.selected}` : `removed ${f.key} from ${name}`);
     } catch (e) {
       this.status(`save failed: ${e.message}`, 0);
@@ -295,7 +296,8 @@ const library = {
       $('#loupePick').textContent = f.picked ? '★ Picked' : '☆ Pick';
       $('#loupePick').setAttribute('aria-pressed', f.picked);
       $('#loupeSel').hidden = !app.target;
-      $('#loupeSel').textContent = f.selected ? `In ${app.targetName()} #${f.selected}` : `Add to ${app.targetName()}`;
+      $('#loupeSel').textContent = f.selected ? `In collection #${f.selected}` : 'Add to collection';
+      $('#loupeSel').title = `${f.selected ? 'Remove from' : 'Add to'} ${app.targetName()} (S)`;
       $('#loupeSel').setAttribute('aria-pressed', !!f.selected);
     }
   },
@@ -448,10 +450,26 @@ app.thumbs = thumbs;
 
 // The preview renders through the develop shader, so it shows each frame's edit.
 const loupe = {
-  renderer: null, params: null, token: 0, timer: null,
+  renderer: null, params: null, source: null, frame: null, token: 0, timer: null,
+  zoom: 1, panX: 0, panY: 0, fitW: 0, fitH: 0, fullRequested: false,
+  fullReady: false, pixels: false, edges: false, edgeRaf: 0,
 
   show(id) {
     // Holding an arrow key flies through frames; only load where it settles.
+    this.token++;
+    if (id !== this.frame?.id) {
+      this.zoom = 1;
+      this.panX = this.panY = 0;
+      this.pixels = this.fullReady = false;
+      this.frame = null;
+      $('#loupeView').hidden = true;
+      $('#loupeEdges').hidden = true;
+      $('#loupeMinimap').hidden = true;
+      $('#loupeZoomStatus').textContent = 'Loading preview…';
+      $('#loupeZoomStatus').hidden = false;
+      this.draw();
+      this.paintControls();
+    }
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.load(id), 60);
   },
@@ -460,20 +478,53 @@ const loupe = {
     const f = app.frame(id);
     if ($('#loupe').hidden || !f) return;
     const token = ++this.token, stale = () => token !== this.token;
+    let quickReady = false, rawReady = false, rawFailed = false;
     try {
       const edit = await fetch(`/api/edit?shoot=${encodeURIComponent(f.shoot)}&key=${f.key}`).then(r => r.json());
       if (stale()) return;
       // From the file Develop would open, so the preview matches it.
-      const img = await loadSource(app, f, sourceOf(f, edit.params), { stale });
+      const source = sourceOf(f, edit.params);
+      if (source === 'raw') {
+        $('#loupeZoomStatus').textContent = 'Decoding RAW…';
+        // The server's preview is the camera JPEG (or the RAW's embedded
+        // JPEG). It gives immediate context while LibRaw does its work.
+        loadBitmap(app.src('preview', f)).then(quick => {
+          if (stale() || rawReady) return release(quick);
+          if (!this.renderer) this.renderer = new Renderer($('#loupeView'));
+          this.renderer.setImage(quick);
+          release(quick);
+          this.params = null;
+          quickReady = true;
+          $('#loupeView').hidden = false;
+          this.draw();
+          $('#loupeZoomStatus').textContent = rawFailed
+            ? 'RAW unavailable · JPEG preview' : 'JPEG preview · decoding RAW…';
+        }).catch(() => {});
+      }
+      const img = await loadSource(app, f, source, { stale, quiet: source === 'raw', background: false });
       if (!img || stale()) return release(img);
+      rawReady = true;
       if (!this.renderer) this.renderer = new Renderer($('#loupeView'));
       this.renderer.setImage(img);
       release(img);
       this.params = edit.params;
+      this.source = source;
+      this.frame = f;
+      this.fullRequested = false;
+      this.fullReady = false;
+      $('#loupeView').hidden = false;
       this.draw();
+      $('#loupeZoomStatus').hidden = true;
+      if (this.zoom > 1 || this.edges) this.loadFull();
       const ids = library.visible();
       prefetch(app, ids.map(i => app.frame(i)), ids.indexOf(id), () => app.focusKey);
     } catch (e) {
+      rawFailed = true;
+      if (!stale()) {
+        $('#loupeZoomStatus').textContent = quickReady
+          ? 'RAW unavailable · JPEG preview' : 'Preview unavailable';
+        $('#loupeZoomStatus').hidden = false;
+      }
       app.status(`preview failed: ${e.message}`, 0);
     }
   },
@@ -481,13 +532,250 @@ const loupe = {
   draw() {
     if (!this.renderer || !this.renderer.w) return;
     const stage = $('#loupeStage');
+    if (!stage.clientWidth || !stage.clientHeight) return;
     const view = $('#loupeView');
+    if (this.pixels && this.fullReady) {
+      const p = normalize(this.params);
+      const [fw, fh] = orientedSize(p, this.renderer.w, this.renderer.h);
+      const fullW = p.crop.w * fw, fullH = p.crop.h * fh;
+      const s = Math.min((stage.clientWidth - 32) / fullW, (stage.clientHeight - 32) / fullH);
+      const old = this.zoom;
+      this.fitW = fullW * s;
+      this.fitH = fullH * s;
+      this.zoom = 1 / s;
+      this.panX *= this.zoom / old;
+      this.panY *= this.zoom / old;
+      this.clampPan();
+      this.renderPixels();
+      this.paintControls();
+      this.paintMap();
+      return;
+    }
     this.renderer.render(this.params, {
-      maxSize: Math.max(stage.clientWidth, stage.clientHeight) * (devicePixelRatio || 1),
+      maxSize: Math.max(stage.clientWidth, stage.clientHeight) * (devicePixelRatio || 1) * this.zoom,
     });
     const s = Math.min((stage.clientWidth - 32) / view.width, (stage.clientHeight - 32) / view.height);
-    view.style.width = Math.floor(view.width * s) + 'px';
-    view.style.height = Math.floor(view.height * s) + 'px';
+    this.fitW = view.width * s;
+    this.fitH = view.height * s;
+    view.style.width = Math.floor(this.fitW * this.zoom) + 'px';
+    view.style.height = Math.floor(this.fitH * this.zoom) + 'px';
+    this.clampPan();
+    this.applyPan();
+    this.paintControls();
+    this.paintMap();
+    this.queueEdges();
+  },
+
+  renderPixels() {
+    if (!this.pixels || !this.fullReady) return;
+    const stage = $('#loupeStage'), view = $('#loupeView');
+    const fullW = this.fitW * this.zoom, fullH = this.fitH * this.zoom;
+    const w = Math.min(1, stage.clientWidth / fullW);
+    const h = Math.min(1, stage.clientHeight / fullH);
+    const x = Math.max(0, Math.min(1 - w, 0.5 - this.panX / fullW - w / 2));
+    const y = Math.max(0, Math.min(1 - h, 0.5 - this.panY / fullH - h / 2));
+    this.renderer.render(this.params, { viewport: { x, y, w, h } });
+    view.style.width = view.width + 'px';
+    view.style.height = view.height + 'px';
+    view.style.marginLeft = view.style.marginTop = '0px';
+    this.paintMapBox();
+    this.queueEdges();
+  },
+
+  clampPan() {
+    const stage = $('#loupeStage');
+    const x = Math.max(0, (this.fitW * this.zoom - stage.clientWidth) / 2);
+    const y = Math.max(0, (this.fitH * this.zoom - stage.clientHeight) / 2);
+    this.panX = Math.max(-x, Math.min(x, this.panX));
+    this.panY = Math.max(-y, Math.min(y, this.panY));
+  },
+
+  applyPan() {
+    if (this.pixels && this.fullReady) {
+      if (!this.panRaf) this.panRaf = requestAnimationFrame(() => {
+        this.panRaf = 0;
+        this.renderPixels();
+      });
+      this.paintMapBox();
+      return;
+    }
+    const view = $('#loupeView');
+    view.style.marginLeft = this.panX + 'px';
+    view.style.marginTop = this.panY + 'px';
+    this.paintMapBox();
+  },
+
+  paintControls() {
+    $('#loupeZoomLevel').textContent = this.pixels ? '100%' : this.zoom === 1 ? 'Fit' : `${this.zoom}×`;
+    $('#loupeOut').disabled = !this.frame || (!this.pixels && this.zoom === 1);
+    $('#loupeIn').disabled = !this.frame || this.pixels || this.zoom === 4;
+    $('#loupeFit').disabled = !this.frame || (!this.pixels && this.zoom === 1);
+    $('#loupePixels').disabled = !this.frame;
+    $('#loupePixels').setAttribute('aria-pressed', this.pixels);
+    $('#loupeEdgeToggle').disabled = !this.frame;
+    $('#loupeEdgeToggle').setAttribute('aria-pressed', this.edges);
+    $('#loupeView').classList.toggle('zoomed', this.zoom > 1);
+    $('#loupeMinimap').hidden = this.zoom === 1 || !this.frame || !this.renderer?.w;
+  },
+
+  setZoom(next, point = null) {
+    if (!this.frame) return;
+    const old = this.zoom;
+    const wasPixels = this.pixels;
+    this.pixels = false;
+    next = Math.max(1, Math.min(4, next));
+    if (next === old && !wasPixels) return;
+    if (point && this.fitW && this.fitH) {
+      const rect = $('#loupeStage').getBoundingClientRect();
+      const dx = point.clientX - rect.left - rect.width / 2;
+      const dy = point.clientY - rect.top - rect.height / 2;
+      this.panX = -(dx - this.panX) * next / old;
+      this.panY = -(dy - this.panY) * next / old;
+    } else {
+      this.panX *= next / old;
+      this.panY *= next / old;
+    }
+    this.zoom = next;
+    if (next === 1) this.panX = this.panY = 0;
+    this.draw();
+    if (next > 1) this.loadFull();
+  },
+
+  setPixels() {
+    if (!this.frame) return;
+    if (this.pixels) return this.setZoom(1);
+    this.captureMap();
+    this.pixels = true;
+    if (this.fullReady) this.draw();
+    else {
+      this.paintControls();
+      this.loadFull();
+    }
+  },
+
+  async loadFull() {
+    if (this.fullRequested || !this.frame || (this.zoom === 1 && !this.pixels && !this.edges)) return;
+    this.fullRequested = true;
+    const token = this.token, f = this.frame;
+    const status = $('#loupeZoomStatus');
+    status.textContent = 'Loading full detail…';
+    status.hidden = false;
+    try {
+      const img = await loadSource(app, f, this.source,
+        { full: true, quiet: true, background: true, keep: false, stale: () => token !== this.token });
+      if (!img || token !== this.token) return release(img);
+      if (this.pixels) this.captureMap();
+      this.renderer.setImage(img);
+      release(img);
+      this.fullReady = true;
+      this.draw();
+      status.hidden = true;
+    } catch {
+      if (token === this.token) status.textContent = 'Full detail unavailable';
+    }
+  },
+
+  paintMap() {
+    const map = $('#loupeMinimap'), canvas = $('#loupeMap');
+    if (this.zoom === 1 || !this.fitW || !this.fitH) return;
+    if (this.pixels) {
+      map.hidden = false;
+      this.paintMapBox();
+      return;
+    }
+    const scale = Math.min(160 / this.fitW, 120 / this.fitH);
+    const w = Math.max(1, Math.round(this.fitW * scale));
+    const h = Math.max(1, Math.round(this.fitH * scale));
+    const dpr = Math.min(devicePixelRatio || 1, 3);
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    canvas.getContext('2d').drawImage($('#loupeView'), 0, 0, canvas.width, canvas.height);
+    map.hidden = false;
+    this.paintMapBox();
+  },
+
+  captureMap() {
+    const view = $('#loupeView');
+    if (!view.width || !view.height) return;
+    const canvas = $('#loupeMap');
+    const s = Math.min(160 / view.width, 120 / view.height);
+    canvas.width = Math.max(1, Math.round(view.width * s));
+    canvas.height = Math.max(1, Math.round(view.height * s));
+    canvas.style.width = canvas.width + 'px';
+    canvas.style.height = canvas.height + 'px';
+    canvas.getContext('2d').drawImage(view, 0, 0, canvas.width, canvas.height);
+  },
+
+  setEdges() {
+    if (!this.frame) return;
+    this.edges = !this.edges;
+    $('#loupeEdgeToggle').setAttribute('aria-pressed', this.edges);
+    $('#loupeEdges').hidden = !this.edges || !this.fullReady;
+    if (this.edges) {
+      if (!this.fullReady) this.loadFull();
+      else this.queueEdges();
+    }
+  },
+
+  queueEdges() {
+    if (!this.edges || !this.fullReady || $('#loupeView').hidden) return;
+    cancelAnimationFrame(this.edgeRaf);
+    this.edgeRaf = requestAnimationFrame(() => this.paintEdges());
+  },
+
+  paintEdges() {
+    const stage = $('#loupeStage'), view = $('#loupeView'), overlay = $('#loupeEdges');
+    if (!this.edges || !this.fullReady || view.hidden) return;
+    const w = Math.round(stage.clientWidth), h = Math.round(stage.clientHeight);
+    if (!w || !h) return;
+    if (!this.edgeInput) this.edgeInput = document.createElement('canvas');
+    const input = this.edgeInput;
+    input.width = overlay.width = w;
+    input.height = overlay.height = h;
+    const rect = view.getBoundingClientRect(), stageRect = stage.getBoundingClientRect();
+    const ctx = input.getContext('2d', { willReadFrequently: true });
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(view, rect.left - stageRect.left, rect.top - stageRect.top, rect.width, rect.height);
+    const src = ctx.getImageData(0, 0, w, h).data;
+    const gray = new Uint8Array(w * h);
+    for (let i = 0, j = 0; i < gray.length; i++, j += 4)
+      gray[i] = src[j + 3] ? 0.2126 * src[j] + 0.7152 * src[j + 1] + 0.0722 * src[j + 2] : 0;
+    const out = overlay.getContext('2d').createImageData(w, h);
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x, j = i * 4;
+      if (!src[j + 3]) continue;
+      const l = gray[i - 1], r = gray[i + 1], u = gray[i - w], d = gray[i + w];
+      if (Math.abs(4 * gray[i] - l - r - u - d) < 18 || Math.abs(l - r) + Math.abs(u - d) < 16) continue;
+      out.data[j] = 30; out.data[j + 1] = 235; out.data[j + 2] = 255; out.data[j + 3] = 200;
+    }
+    overlay.getContext('2d').putImageData(out, 0, 0);
+    overlay.hidden = false;
+  },
+
+  paintMapBox() {
+    if (this.zoom === 1) return;
+    const stage = $('#loupeStage'), map = $('#loupeMap'), box = $('#loupeMapBox');
+    const imageW = this.fitW * this.zoom, imageH = this.fitH * this.zoom;
+    if (!map.clientWidth || !imageW || !imageH) return;
+    const w = Math.min(1, stage.clientWidth / imageW);
+    const h = Math.min(1, stage.clientHeight / imageH);
+    const cx = 0.5 - this.panX / imageW, cy = 0.5 - this.panY / imageH;
+    box.style.width = w * map.clientWidth + 'px';
+    box.style.height = h * map.clientHeight + 'px';
+    box.style.left = Math.max(0, Math.min(1 - w, cx - w / 2)) * map.clientWidth + 'px';
+    box.style.top = Math.max(0, Math.min(1 - h, cy - h / 2)) * map.clientHeight + 'px';
+  },
+
+  panFromMap(e) {
+    const rect = $('#loupeMap').getBoundingClientRect();
+    const u = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const v = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    this.panX = (0.5 - u) * this.fitW * this.zoom;
+    this.panY = (0.5 - v) * this.fitH * this.zoom;
+    this.clampPan();
+    this.applyPan();
   },
 };
 new ResizeObserver(() => loupe.draw()).observe($('#loupeStage'));
@@ -531,7 +819,62 @@ $('#loupePick').addEventListener('click', e => { e.target.blur(); if (app.focusK
 $('#loupeSel').addEventListener('click', e => { e.target.blur(); if (app.focusKey) app.toggleSelect(app.focusKey); });
 $('#loupeSync').addEventListener('click', e => { e.target.blur(); sync.open(); });
 $('#loupeDev').addEventListener('click', e => { e.target.blur(); if (app.focusKey) app.setTab('develop'); });
-$('#loupeView').addEventListener('click', () => app.focusKey && app.setTab('develop'));
+$('#loupeView').addEventListener('click', e => {
+  if (loupe.dragged) { loupe.dragged = false; return; }
+  if (app.focusKey) loupe.setZoom(loupe.zoom === 1 ? 2 : loupe.zoom + 1, e);
+});
+$('#loupeView').addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault(); e.stopPropagation();
+    loupe.setZoom(loupe.zoom === 1 ? 2 : loupe.zoom + 1);
+  } else if (e.key === 'Escape' && loupe.zoom > 1) {
+    e.preventDefault(); e.stopPropagation(); loupe.setZoom(1);
+  }
+});
+$('#loupeView').addEventListener('pointerdown', e => {
+  if (loupe.zoom === 1) return;
+  e.preventDefault();
+  e.currentTarget.setPointerCapture(e.pointerId);
+  loupe.drag = { x: e.clientX, y: e.clientY };
+  loupe.dragged = false;
+  e.currentTarget.classList.add('panning');
+});
+$('#loupeView').addEventListener('pointermove', e => {
+  if (!loupe.drag) return;
+  const dx = e.clientX - loupe.drag.x, dy = e.clientY - loupe.drag.y;
+  if (Math.abs(dx) + Math.abs(dy) > 2) loupe.dragged = true;
+  loupe.panX += dx; loupe.panY += dy;
+  loupe.drag.x = e.clientX; loupe.drag.y = e.clientY;
+  loupe.clampPan(); loupe.applyPan();
+});
+for (const type of ['pointerup', 'pointercancel']) $('#loupeView').addEventListener(type, e => {
+  loupe.drag = null;
+  e.currentTarget.classList.remove('panning');
+});
+$('#loupeIn').addEventListener('click', e => { e.currentTarget.blur(); loupe.setZoom(loupe.zoom + 1); });
+$('#loupeOut').addEventListener('click', e => { e.currentTarget.blur(); loupe.setZoom(loupe.pixels ? 4 : loupe.zoom - 1); });
+$('#loupeFit').addEventListener('click', e => { e.currentTarget.blur(); loupe.setZoom(1); });
+$('#loupePixels').addEventListener('click', e => { e.currentTarget.blur(); loupe.setPixels(); });
+$('#loupeEdgeToggle').addEventListener('click', e => { e.currentTarget.blur(); loupe.setEdges(); });
+$('#loupeStage').addEventListener('wheel', e => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault(); loupe.setZoom(loupe.zoom + (e.deltaY < 0 ? 1 : -1), e);
+}, { passive: false });
+$('#loupeMinimap').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  e.currentTarget.setPointerCapture(e.pointerId);
+  loupe.mapDrag = true;
+  loupe.panFromMap(e);
+});
+$('#loupeMinimap').addEventListener('pointermove', e => { if (loupe.mapDrag) loupe.panFromMap(e); });
+for (const type of ['pointerup', 'pointercancel']) $('#loupeMinimap').addEventListener(type, () => { loupe.mapDrag = false; });
+$('#loupeMinimap').addEventListener('keydown', e => {
+  const step = { ArrowLeft: [-40, 0], ArrowRight: [40, 0], ArrowUp: [0, -40], ArrowDown: [0, 40] }[e.key];
+  if (!step) return;
+  e.preventDefault(); e.stopPropagation();
+  loupe.panX -= step[0]; loupe.panY -= step[1];
+  loupe.clampPan(); loupe.applyPan();
+});
 
 library.zoom(+stored('studio.thumb', 120));
 setLoupe(stored('studio.loupe', '1') === '1');
@@ -590,6 +933,14 @@ for (const b of document.querySelectorAll('.tabs button')) {
 }
 
 addEventListener('keydown', e => {
+  const help = document.querySelector('.shortcut-help[open]');
+  if (e.key === 'Escape' && help) {
+    help.open = false;
+    help.querySelector('summary').focus();
+    e.preventDefault();
+    return;
+  }
+  if (e.target.closest?.('.shortcut-help')) return;
   if (fullscreen.isOpen) return fullscreen.onKey(e);
   if (e.target.matches?.('input, select, textarea') || document.querySelector('dialog[open]')) return;
   if (e.key.toLowerCase() === 'f' && e.shiftKey && !e.metaKey && !e.ctrlKey) { e.preventDefault(); return openFullscreen(); }
@@ -600,7 +951,8 @@ addEventListener('keydown', e => {
   }
   const k = e.key.toLowerCase();
   if (k === 'g' && app.tab !== 'library') return app.setTab('library');
-  if ((k === 'd' || k === 'enter') && app.tab === 'library') {
+  if (k === 'p') { e.preventDefault(); return app.setTab('post'); }
+  if (k === 'd' || (k === 'enter' && app.tab === 'library')) {
     if (app.focusKey) app.setTab('develop');
     return;
   }
@@ -608,15 +960,20 @@ addEventListener('keydown', e => {
   if (app.tab === 'develop') return develop.onKey(e);
   if (app.tab === 'post') return post.onKey(e);
 
-  if (k === 'arrowright' || k === 'j') { e.preventDefault(); library.move(1); }
-  else if (k === 'arrowleft' || k === 'k') { e.preventDefault(); library.move(-1); }
-  else if (k === 'arrowdown') { e.preventDefault(); library.move(library.columns()); }
-  else if (k === 'arrowup') { e.preventDefault(); library.move(-library.columns()); }
-  else if (k === ' ' || k === 'p') { e.preventDefault(); if (app.focusKey) app.togglePick(app.focusKey); }
+  if (k === 'arrowright' || k === 'l') { e.preventDefault(); library.move(1); }
+  else if (k === 'arrowleft' || k === 'h') { e.preventDefault(); library.move(-1); }
+  else if (k === 'arrowdown' || k === 'j') { e.preventDefault(); library.move(library.columns()); }
+  else if (k === 'arrowup' || k === 'k') { e.preventDefault(); library.move(-library.columns()); }
+  else if (k === ' ') { e.preventDefault(); if (app.focusKey) app.togglePick(app.focusKey); }
   else if (k === 'f') setFilter(library.filter() === 'picks' ? 'all' : 'picks');
   else if ((k === '[' || k === ']') && library.filter() === 'post') nudgePost(k === ']' ? 1 : -1);
-  else if (k === 'o' && app.target) setFilter(library.filter() === 'post' ? 'picks' : 'post');
+  else if (k === 'o') {
+    const filters = [...$('#filter').options].filter(o => !o.hidden).map(o => o.value);
+    setFilter(filters[(filters.indexOf(library.filter()) + 1) % filters.length]);
+  }
   else if (k === 'e') $('#loupeBtn').click();
+  else if (k === 'i') { e.preventDefault(); loupe.setPixels(); }
+  else if (k === 'v') { e.preventDefault(); loupe.setEdges(); }
   else if (k === 'escape' && app.chosen.size) library.choose([]);
   else if (k === '=' || k === '+') library.zoom(+$('#zoom').value + 30);
   else if (k === '-' || k === '_') library.zoom(+$('#zoom').value - 30);
@@ -646,10 +1003,21 @@ $('#list').addEventListener('wheel', e => {
 }, { passive: false });
 
 // Number every frame here by its place in the target collection.
+function updateCollectionCount(slug, count) {
+  const collection = app.collections.find(c => c.slug === slug);
+  if (!collection) return;
+  collection.items = count;
+  if (collection.days) return; // Day collections show their number of days.
+  const option = [...$('#shoot').options].find(o => o.value === `collection:${slug}`);
+  if (option) option.textContent = `${collection.name} (${count})`;
+}
+
 async function loadTarget() {
   if (!app.target) return app.applySelects([]);
   const res = await fetch(`/api/collection?slug=${encodeURIComponent(app.target)}`);
-  app.applySelects(res.ok ? (await res.json()).items : []);
+  const items = res.ok ? (await res.json()).items : [];
+  app.applySelects(items);
+  if (res.ok) updateCollectionCount(app.target, items.length);
 }
 
 function setTarget(slug) {
@@ -685,16 +1053,20 @@ async function loadView(value, tab, frame) {
 
 // Rebuild the view menu and the target menu from the server.
 async function refreshMenus(keepView) {
-  const { shoots, collections } = await (await fetch('/api/shoots')).json();
+  const { shoots, shootCounts = {}, collections } = await (await fetch('/api/shoots')).json();
   app.collections = collections;
   const sel = $('#shoot');
   const colOpts = collections.map(c => {
     // Two cameras on one day are two shoot folders, so count dates, not folders.
     const days = new Set(c.shoots.map(shootDate)).size;
-    const what = c.days ? `${days} days` : `${c.items} photos`;
+    const what = c.days ? `${days} days` : c.items;
     return `<option value="collection:${c.slug}">${c.name} (${what})</option>`;
   }).join('');
-  const shootOpts = shoots.map(s => `<option value="shoot:${s}">${s}</option>`).join('');
+  const shootOpts = shoots.map(s => {
+    const n = shootCounts[s];
+    const count = Number.isInteger(n) ? ` (${n})` : '';
+    return `<option value="shoot:${s}">${s}${count}</option>`;
+  }).join('');
   sel.innerHTML = (collections.length ? `<optgroup label="Collections">${colOpts}</optgroup>` : '') +
     `<optgroup label="Days">${shootOpts}</optgroup>`;
   if (keepView && [...sel.options].some(o => o.value === keepView)) sel.value = keepView;

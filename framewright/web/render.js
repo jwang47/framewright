@@ -299,6 +299,7 @@ out vec4 color;
 uniform sampler2D img;
 uniform vec2 srcSize;
 uniform vec4 crop;          // x, y, w, h in the straightened frame, 0..1
+uniform vec4 viewport;      // visible part of the crop; permits native-pixel inspection
 uniform float angle;        // radians
 uniform float vertical, horizontal, distortion;                 // -1..1
 uniform float groundShift, horizon;   // bottom-edge shift (-1..1), horizon height (0..1)
@@ -637,7 +638,8 @@ float maskWeight(int i, vec2 q, vec3 rgb) {
 void main() {
   // Geometry, undone in reverse: output pixel -> crop -> straighten ->
   // perspective -> lens distortion -> source. Mirrored by toSource() in JS.
-  vec2 p = (crop.xy + v_uv * crop.zw) * srcSize;
+  vec2 fullUv = viewport.xy + v_uv * viewport.zw;
+  vec2 p = (crop.xy + fullUv * crop.zw) * srcSize;
   // Ground shift: stepping sideways moves ground points in proportion to how
   // far below the horizon they are, and leaves the horizon itself alone.
   p.x -= groundShift * GROUND * srcSize.x * max(0.0, p.y / srcSize.y - horizon) / max(1.0 - horizon, 0.05)
@@ -697,7 +699,7 @@ void main() {
     rgb = colorGrade(rgb, useCurve == 1, 0.25, splitShadow, splitHigh, splitPivot);
 
   // Masks, in order, each blending its own adjustments in by its weight.
-  vec2 q = crop.xy + v_uv * crop.zw;
+  vec2 q = crop.xy + fullUv * crop.zw;
   float overlay = 0.0;
   for (int i = 0; i < MAX_MASKS; i++) {
     if (i >= maskCount) break;
@@ -722,7 +724,7 @@ void main() {
 
   // Vignette measured across the cropped frame, corner = 1.
   vec2 outSize = crop.zw * srcSize;
-  float r = length((v_uv - 0.5) * outSize) / (0.5 * length(outSize));
+  float r = length((fullUv - 0.5) * outSize) / (0.5 * length(outSize));
   rgb *= 1.0 + vignette * 0.8 * smoothstep(0.35, 1.0, r);
   if (detail != 0.0) {
     float Yd = dot(rgb, LUMA), Pd = pow(max(Yd, 0.0), 1.0 / 2.2);
@@ -776,7 +778,7 @@ export class Renderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
     this.u = {};
-    for (const name of ['img', 'srcSize', 'crop', 'angle', 'vertical', 'horizontal', 'distortion', 'groundShift', 'skyShift', 'horizon', 'areaCount', 'areaPts', 'areaFeather', 'lensK', 'lensScale', 'orient', 'flipH', 'flipV', 'maskCount', 'maskType', 'maskGeo', 'maskShift',
+    for (const name of ['img', 'srcSize', 'crop', 'viewport', 'angle', 'vertical', 'horizontal', 'distortion', 'groundShift', 'skyShift', 'horizon', 'areaCount', 'areaPts', 'areaFeather', 'lensK', 'lensScale', 'orient', 'flipH', 'flipV', 'maskCount', 'maskType', 'maskGeo', 'maskShift',
       'maskTex0', 'maskTex1', 'maskTex2', 'maskTex3', 'maskTex4', 'maskTex5', 'maskTex6', 'maskTex7', 'maskAngle', 'maskFalloff', 'maskOpt', 'maskAdjA', 'maskAdjB', 'showMask', 'exposure', 'contrast', 'highlights',
       'shadows', 'whites', 'blacks', 'temp', 'tint', 'vibrance', 'saturation', 'vignette', 'grain', 'grainSize', 'pxSize', 'seed', 'curveLut', 'useCurve', 'splitShadow', 'splitHigh', 'splitPivot', 'useLook', 'lookAmount', 'lookWb', 'lookTone', 'lookBlacks', 'lookPresence', 'lookCurve', 'lookSplitShadow', 'lookSplitHigh', 'lookSplitPivot', 'useLut', 'lut', 'lutMin', 'lutScale', 'lutSize', 'linearSrc', 'useProfile', 'camMatrix', 'baseCurve', 'baseLog', 'useWarp', 'warpKr', 'warpCentre', 'sharpen', 'sharpenRadius', 'noiseLuma', 'noiseColor']) {
       this.u[name] = gl.getUniformLocation(prog, name);
@@ -912,19 +914,21 @@ export class Renderer {
   }
 
   // opts.crop / opts.angle override the recipe's geometry (crop mode shows the
-  // whole straightened frame); opts.tone === false renders the untouched image.
+  // whole straightened frame); opts.viewport renders a region at native detail
+  // without changing crop-relative effects. opts.tone === false is untouched.
   render(params, opts = {}) {
     const gl = this.gl;
     this.renders++;
     const p = normalize(params);
     const crop = opts.crop || p.crop;
+    const viewport = opts.viewport || FULL_CROP;
     const angle = opts.angle ?? p.angle;
     const tone = opts.tone !== false;
     // Everything after the turn works in the turned frame, so a quarter turn swaps sides.
     const [fw, fh] = orientedSize(p, this.w, this.h);
-    let scale = Math.min(1, (opts.maxSize || Infinity) / Math.max(crop.w * fw, crop.h * fh));
-    let outW = Math.max(1, Math.round(crop.w * fw * scale));
-    let outH = Math.max(1, Math.round(crop.h * fh * scale));
+    let scale = Math.min(1, (opts.maxSize || Infinity) / Math.max(crop.w * viewport.w * fw, crop.h * viewport.h * fh));
+    let outW = Math.max(1, Math.round(crop.w * viewport.w * fw * scale));
+    let outH = Math.max(1, Math.round(crop.h * viewport.h * fh * scale));
     if (this.canvas.width !== outW) this.canvas.width = outW;
     if (this.canvas.height !== outH) this.canvas.height = outH;
     // The browser may quietly give a big canvas a smaller drawing buffer
@@ -933,8 +937,8 @@ export class Renderer {
     const fit = Math.min(1, gl.drawingBufferWidth / outW, gl.drawingBufferHeight / outH);
     if (fit < 1) {
       scale *= fit;
-      outW = Math.max(1, Math.min(gl.drawingBufferWidth, Math.floor(crop.w * fw * scale)));
-      outH = Math.max(1, Math.min(gl.drawingBufferHeight, Math.floor(crop.h * fh * scale)));
+      outW = Math.max(1, Math.min(gl.drawingBufferWidth, Math.floor(crop.w * viewport.w * fw * scale)));
+      outH = Math.max(1, Math.min(gl.drawingBufferHeight, Math.floor(crop.h * viewport.h * fh * scale)));
       this.canvas.width = outW;
       this.canvas.height = outH;
     }
@@ -946,6 +950,7 @@ export class Renderer {
     gl.uniform1f(this.u.flipH, opts.tone !== false && p.flipH ? 1 : 0);
     gl.uniform1f(this.u.flipV, opts.tone !== false && p.flipV ? 1 : 0);
     gl.uniform4f(this.u.crop, crop.x, crop.y, crop.w, crop.h);
+    gl.uniform4f(this.u.viewport, viewport.x, viewport.y, viewport.w, viewport.h);
     gl.uniform1f(this.u.angle, angle * Math.PI / 180);
     gl.uniform1f(this.u.vertical, p.vertical / 100);
     gl.uniform1f(this.u.horizontal, p.horizontal / 100);
@@ -1006,7 +1011,7 @@ export class Renderer {
     const lookGrain = L ? L.grain * amt : 0;
     gl.uniform1f(this.u.grain, tone ? Math.min(1, (p.grain + lookGrain) / 100) : 0);
     gl.uniform1f(this.u.grainSize, (p.grain > 0 || !lookGrain ? p.grainSize : L.grainSize) / 100);
-    gl.uniform1f(this.u.pxSize, crop.w * fw / outW / Math.max(fw, fh));
+    gl.uniform1f(this.u.pxSize, crop.w * viewport.w * fw / outW / Math.max(fw, fh));
     gl.uniform1f(this.u.seed, 0.5);
     gl.uniform1i(this.u.linearSrc, this.linear ? 1 : 0);
     const prof = this.profile;

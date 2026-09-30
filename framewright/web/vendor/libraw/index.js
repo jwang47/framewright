@@ -1,1 +1,69 @@
-var i=class{constructor(){this.worker=new Worker(new URL("./worker.js",import.meta.url),{type:"module"}),this.pending=new Map,this.nextId=0,this.tail=Promise.resolve(),this.disposed=!1,this.worker.onmessage=({data:e})=>{let t=this.pending.get(e?.id);t&&(this.pending.delete(e.id),e?.error?t.reject(new Error(e.error)):t.resolve(e?.out))}}dispose(){this.disposed=!0,this.worker.terminate();for(let{reject:e}of this.pending.values())e(new Error("LibRaw disposed"));this.pending.clear()}runFn(e,...t){let n=()=>new Promise((h,s)=>{if(this.disposed){s(new Error("LibRaw disposed"));return}let o=this.nextId++;this.pending.set(o,{resolve:h,reject:s}),this.worker.postMessage({id:o,fn:e,args:t},t.map(r=>{if([ArrayBuffer,Uint8Array,Int8Array,Uint16Array,Int16Array,Uint32Array,Int32Array,Float32Array,Float64Array].some(m=>r instanceof m))return r.buffer}).filter(r=>r))}),a=this.tail.then(n,n);return this.tail=a.then(()=>{},()=>{}),a}async open(e,t){return await this.runFn("open",e,t)}async metadata(e){let t=await this.runFn("metadata",!!e);return t?.hasOwnProperty("thumb_format")&&(t.thumb_format=["unknown","jpeg","bitmap","bitmap16","layer","rollei","h265"][t.thumb_format]||"unknown"),t?.hasOwnProperty("desc")&&(t.desc=String(t.desc).trim()),t?.hasOwnProperty("timestamp")&&(t.timestamp=new Date(t.timestamp*1e3)),t}async imageData(){return await this.runFn("imageData")}async rawImageData(){return await this.runFn("rawImageData")}async thumbnailData(){return await this.runFn("thumbnailData")}};export{i as default};
+// LibRaw-Wasm wrapper, with bounded requests and worker failure cleanup.
+export default class LibRaw {
+  constructor() {
+    this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+    this.pending = new Map();
+    this.nextId = 0;
+    this.tail = Promise.resolve();
+    this.disposed = false;
+    this.worker.onmessage = ({ data }) => {
+      const request = this.pending.get(data?.id);
+      if (!request) return;
+      this.pending.delete(data.id);
+      clearTimeout(request.timer);
+      if (data.error) request.reject(new Error(data.error));
+      else request.resolve(data.out);
+    };
+    this.worker.onerror = event => {
+      event.preventDefault?.();
+      this.dispose(new Error(`RAW decoder worker failed: ${event.message || 'worker stopped'}`));
+    };
+    this.worker.onmessageerror = () => this.dispose(new Error('RAW decoder returned an unreadable response'));
+  }
+
+  dispose(error = new Error('LibRaw disposed')) {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.failure = error;
+    this.worker.terminate();
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
+    this.pending.clear();
+  }
+
+  runFn(fn, ...args) {
+    const run = () => new Promise((resolve, reject) => {
+      if (this.disposed) { reject(this.failure); return; }
+      const id = this.nextId++;
+      const timer = setTimeout(() => {
+        this.dispose(new Error(`RAW decoder timed out during ${fn}; click the photo to retry`));
+      }, 60000);
+      this.pending.set(id, { resolve, reject, timer });
+      try {
+        const transfers = args.filter(a => ArrayBuffer.isView(a) && !(a instanceof DataView)).map(a => a.buffer);
+        this.worker.postMessage({ id, fn, args }, transfers);
+      } catch (error) {
+        this.dispose(error);
+      }
+    });
+    const result = this.tail.then(run, run);
+    this.tail = result.then(() => {}, () => {});
+    return result;
+  }
+
+  async open(bytes, settings) { return this.runFn('open', bytes, settings); }
+  async metadata(full) {
+    const meta = await this.runFn('metadata', !!full);
+    if (Object.hasOwn(meta || {}, 'thumb_format')) {
+      meta.thumb_format = ['unknown', 'jpeg', 'bitmap', 'bitmap16', 'layer', 'rollei', 'h265'][meta.thumb_format] || 'unknown';
+    }
+    if (Object.hasOwn(meta || {}, 'desc')) meta.desc = String(meta.desc).trim();
+    if (Object.hasOwn(meta || {}, 'timestamp')) meta.timestamp = new Date(meta.timestamp * 1000);
+    return meta;
+  }
+  async imageData() { return this.runFn('imageData'); }
+  async rawImageData() { return this.runFn('rawImageData'); }
+  async thumbnailData() { return this.runFn('thumbnailData'); }
+}

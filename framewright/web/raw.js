@@ -1,7 +1,7 @@
 // Raw decoding in the page, with LibRaw compiled to WebAssembly. A decoded
 // raw is linear light in sRGB primaries, white balanced as shot, handed to
 // the renderer as half floats so nothing is lost to 8 bits.
-import LibRaw from './vendor/libraw/index.js';
+import LibRaw from './vendor/libraw/index.js?v=worker-lifecycle-2';
 import { dngCorrections } from './dng.js';
 
 // This build ignores the gamm setting and always writes dcraw's default

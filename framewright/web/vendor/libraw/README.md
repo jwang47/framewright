@@ -6,6 +6,10 @@ a WebAssembly build of [LibRaw](https://www.libraw.org/) (LGPL 2.1 or CDDL 1.0).
 Source maps were dropped. To update, `npm pack libraw-wasm@<version>` and copy
 the same four files.
 
+`index.js` is locally maintained: requests are serialized, worker errors reject
+pending requests, and a request with no reply for 60 seconds terminates the
+worker. Preserve these changes when updating upstream files.
+
 This build ignores the `gamm` setting and always outputs dcraw's default
 gamma curve; `raw.js` undoes it. Check that before relying on `gamm` after an
 update.
