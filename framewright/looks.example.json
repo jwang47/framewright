@@ -1,0 +1,7 @@
+{
+  "looks": [
+    {"name": "Soft daylight", "params": {"curve": {"rgb": [[0, 4], [25, 27], [75, 77], [100, 98]]}, "grain": 8, "grainSize": 20}},
+    {"name": "Warm highlights", "params": {"splitHighlightHue": 42, "splitHighlightSat": 12, "splitShadowHue": 215, "splitShadowSat": 6, "splitBalance": 10}},
+    {"name": "Quiet contrast", "params": {"curve": {"rgb": [[0, 0], [25, 21], [75, 79], [100, 100]]}, "saturation": -12, "grain": 15, "grainSize": 25}}
+  ]
+}

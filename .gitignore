@@ -1,0 +1,86 @@
+# Photos and RAWs — never commit image data (a single shoot is >1 GB)
+*.ARW
+*.arw
+*.CR2
+*.CR3
+*.NEF
+*.DNG
+*.dng
+*.RAF
+*.ORF
+*.JPG
+*.jpg
+*.JPEG
+*.jpeg
+*.png
+*.tif
+*.tiff
+*.heic
+*.HEIC
+*.webp
+
+# Video — clips are far bigger than the raws (a single 4K clip is >4 GB)
+*.MP4
+*.mp4
+*.MOV
+*.mov
+*.MTS
+*.mts
+*.M2TS
+*.m2ts
+# Camera clip sidecars: capture metadata, not edit work
+*M01.XML
+*M01.xml
+
+# darktable working files
+*.db
+*.db-*
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Keep edit recipes — these are text and are the actual work
+!*.xmp
+
+# cull.py preview cache
+.preview/
+
+# suggested edits waiting for a yes or no
+*.proposal.json
+
+# export time of a post's slides (see studio.py)
+.exported
+
+# 3D LUTs — third-party and licensed for personal use only; never commit or
+# ship one
+*.cube
+
+*.3dl
+*.CUBE
+*.3DL
+*.rw2
+*.RW2
+*.pef
+*.PEF
+*.srw
+*.SRW
+*.heif
+*.HEIF
+
+# Build products and private release staging
+build/
+dist/
+*.egg-info/
+.release/
+
+# Only reviewed demo images belong in the release
+!docs/samples/
+!docs/samples/*.png
+!docs/samples/*.jpg

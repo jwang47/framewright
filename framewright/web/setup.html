@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Choose a library · Framewright</title>
+<style>
+  :root { color-scheme: dark; font: 16px/1.5 system-ui, sans-serif; background: #181818; color: #ddd; }
+  main { max-width: 36rem; margin: 15vh auto; padding: 1.5rem; }
+  h1 { font-size: 1.7rem; font-weight: 600; }
+  p { color: #aaa; }
+  label { display: block; margin: 1.5rem 0 .5rem; }
+  input, button { font: inherit; border: 1px solid #555; border-radius: 6px; padding: .7rem; }
+  input { box-sizing: border-box; width: 100%; background: #222; color: #fff; }
+  button { margin-top: 1rem; background: #ddd; color: #111; cursor: pointer; }
+  #error { color: #f2ad8d; }
+</style>
+<main>
+  <h1>Choose a folder for your photos</h1>
+  <p>Your library holds shoot folders, edits, picks and looks. Choose an existing library or start with an empty folder.</p>
+  <form>
+    <label for="library">Library folder</label>
+    <input id="library" name="library" placeholder="Absolute folder path" required autofocus autocomplete="off">
+    <p>Enter the full path to a folder on this computer. A new folder will be created if needed.</p>
+    <button type="submit">Open library</button>
+    <p id="error" role="alert"></p>
+  </form>
+</main>
+<script>
+  document.querySelector('form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = document.querySelector('button'), error = document.querySelector('#error');
+    button.disabled = true;
+    error.textContent = '';
+    try {
+      const response = await fetch('/api/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Studio-Setup': '__SETUP_TOKEN__' },
+        body: JSON.stringify({ library: document.querySelector('#library').value }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not open the library');
+      location.replace('/');
+    } catch (exc) {
+      error.textContent = exc.message;
+      button.disabled = false;
+    }
+  });
+</script>
+</html>

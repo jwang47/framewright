@@ -1,0 +1,40 @@
+{
+  "LICENSE.LibRaw-COPYRIGHT": {
+    "url": "https://raw.githubusercontent.com/LibRaw/LibRaw/0.22.1/COPYRIGHT",
+    "sha256": "574c88f5dd59414cfc896293a63defbc2d525a418ed413d7ab7dcc43cf79c509"
+  },
+  "LICENSE.LibRaw-CDDL": {
+    "url": "https://raw.githubusercontent.com/LibRaw/LibRaw/0.22.1/LICENSE.CDDL",
+    "sha256": "0e3098d2d54a12434715f6679ea408d57da5e8d613c385c58ecc6fe5d30cc81f"
+  },
+  "LICENSE.LibRaw-LGPL": {
+    "url": "https://raw.githubusercontent.com/LibRaw/LibRaw/0.22.1/LICENSE.LGPL",
+    "sha256": "eea173a556abac0370461e57e12aab266894ea6be3874c2be05fd87871f75449"
+  },
+  "LICENSE.LittleCMS": {
+    "url": "https://raw.githubusercontent.com/mm2/Little-CMS/lcms2.19.1/LICENSE",
+    "sha256": "6dbd60437f8ef91d8de1f08ad75882547fd4931bfcc3566a0735f28db1484d31"
+  },
+  "LICENSE.Emscripten": {
+    "url": "https://raw.githubusercontent.com/emscripten-core/emscripten/5.0.7/LICENSE",
+    "sha256": "620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86"
+  },
+  "LICENSE.zlib": {
+    "url": "https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE",
+    "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243"
+  },
+  "LICENSE.libpng": {
+    "url": "https://raw.githubusercontent.com/pnggroup/libpng/v1.6.55/LICENSE",
+    "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526"
+  },
+  "LICENSE.libjpeg": {
+    "url": "https://storage.googleapis.com/webassembly/emscripten-ports/jpegsrc.v9f.tar.gz",
+    "member": "jpeg-9f/README",
+    "sha256": "7c25493a9f64fed34d01445467341bda77bc1cdbeccbe33558659ef173fb9ff2"
+  },
+  "LICENSE.LibRaw-components": {
+    "url": "https://codeload.github.com/LibRaw/LibRaw/tar.gz/refs/tags/0.22.1",
+    "archiveSha256": "e676248284075605aa2697a66eeed7dc258820bd1d4988c724d29edffd726726",
+    "sha256": "1cf7e3e0feec64a247a86df322d079d3d870778163693483660608ddbb3faa0a"
+  }
+}

@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Framewright</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="library" aria-selected="true">Library <kbd>G</kbd></button>
+    <button role="tab" data-tab="develop" aria-selected="false">Develop <kbd>D</kbd></button>
+    <button role="tab" data-tab="post" aria-selected="false">Post</button>
+  </nav>
+  <select id="shoot" aria-label="Collection or day"></select>
+  <div class="search">
+    <input id="search" type="search" placeholder="Find a photo   /" autocomplete="off" spellcheck="false" aria-label="Find a photo by name or day">
+    <div id="searchResults" role="listbox" hidden></div>
+  </div>
+  <span class="counts"><span class="pickcount" id="count">0</span> picked of <span id="total">0</span></span>
+  <span class="counts" id="postCount" hidden><span class="postn" id="postN">0</span> here in <span id="postName"></span></span>
+  <span class="status" id="status" role="status"></span>
+  <button id="importBtn" class="card-btn" hidden title="Import new photos from the camera card">Import</button>
+  <button id="offloadBtn" class="card-btn" hidden>Offload</button>
+</header>
+
+<dialog id="offloadDlg" aria-labelledby="offloadTitle">
+  <h2 id="offloadTitle">Offload to <span id="offloadDrive"></span></h2>
+  <div id="offloadPlan"></div>
+  <div id="offloadProgress" hidden>
+    <progress id="offloadBar" max="1" value="0"></progress>
+    <div class="hint" id="offloadNow"></div>
+  </div>
+  <p class="hint">Each photo is copied to the drive, checked byte for byte, and only then removed from here.
+    Picks, edits and previews stay, so the shoots still show with the drive unplugged.</p>
+  <div class="dlg-actions">
+    <button id="offloadThis" hidden>Only this shoot</button>
+    <button id="offloadClose">Close</button>
+    <button id="offloadGo" class="primary">Offload</button>
+  </div>
+</dialog>
+
+<dialog id="importDlg" aria-labelledby="importTitle">
+  <h2 id="importTitle">Import from <span id="importCard"></span></h2>
+  <div id="importPlan"></div>
+  <label class="hint jpeg-only"><input type="checkbox" id="importJpeg"> JPEGs only (raws and clips stay on the card)</label>
+  <label class="hint jpeg-only"><input type="checkbox" id="importDelete"> Delete from card after verified copy</label>
+  <div id="importProgress" hidden>
+    <progress id="importBar" max="1" value="0"></progress>
+    <div class="hint" id="importNow"></div>
+  </div>
+  <p class="hint">Copies are checked byte for byte against the card. Source files stay on the card unless you enable deletion above.</p>
+  <div class="dlg-actions">
+    <button id="importEject" hidden>Eject card</button>
+    <button id="importClose">Close</button>
+    <button id="importGo" class="primary">Import</button>
+  </div>
+</dialog>
+
+<dialog id="syncDlg" aria-labelledby="syncTitle">
+  <h2 id="syncTitle">Sync from <span id="syncSource"></span> to <span id="syncCount"></span> frames</h2>
+  <label class="sync-look">Look <select id="syncLook"></select></label>
+  <div id="syncGroups"></div>
+  <p class="hint">Only what is ticked changes. Crop, straighten, masks and perspective stay each frame's own.</p>
+  <div id="syncProgress" hidden>
+    <progress id="syncBar" max="1" value="0"></progress>
+    <div class="hint" id="syncNow"></div>
+  </div>
+  <div class="dlg-actions">
+    <button id="syncClose">Cancel</button>
+    <button id="syncGo" class="primary">Sync</button>
+  </div>
+</dialog>
+
+<section id="library" class="tab" role="tabpanel">
+  <div class="toolbar">
+    <select id="filter" aria-label="Show">
+      <option value="all">All photos</option>
+      <option value="picks">Picks (F)</option>
+      <option value="post" hidden></option>
+    </select>
+    <label class="zoom">Size <kbd>−</kbd>
+      <input type="range" id="zoom" min="70" max="360" step="10" value="120" aria-label="Thumbnail size">
+      <kbd>+</kbd></label>
+    <span class="chosen-n" id="chosenN" hidden></span>
+    <button id="loupeBtn" aria-pressed="true">Preview <kbd>E</kbd></button>
+    <span class="colctl">
+      <label for="target">Add to</label>
+      <select id="target" aria-label="Target collection"></select>
+      <button id="newCol" title="New collection">New</button>
+      <button id="renameCol" title="Rename the target collection">Rename</button>
+      <button id="deleteCol" title="Delete the target collection (photos stay)">Delete</button>
+    </span>
+    <span class="hint">Arrows move · Space pick · S add to collection · O its order (drag or [ ] to reorder) · D develop</span>
+  </div>
+  <div class="lib">
+    <main id="list" class="grid"></main>
+    <aside class="loupe" id="loupe">
+      <div class="loupe-stage" id="loupeStage"><canvas id="loupeView"></canvas></div>
+      <div class="loupe-bar">
+        <span class="name" id="loupeName"></span>
+        <span id="loupeTime"></span>
+        <span class="tag" id="loupeTag"></span>
+        <button id="loupePick">☆ Pick</button>
+        <button id="loupeSel" hidden>Add to post</button>
+        <button id="loupeSync" hidden title="Copy this frame's look and settings to every chosen frame (⌘⇧S)"></button>
+        <button id="loupeDev">Develop</button>
+        <button id="loupeFs" title="Fullscreen (⇧F)" aria-label="Fullscreen">⤢</button>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<section id="develop" class="tab" role="tabpanel" hidden>
+  <div class="dev">
+    <div class="stage" id="stage">
+      <div class="wrap" id="wrap">
+        <canvas id="view"></canvas>
+        <canvas id="clipView" hidden></canvas>
+        <div id="guides" hidden></div>
+        <div id="crosshair" hidden></div>
+        <div id="horizonLine" hidden><span>horizon</span></div>
+        <svg id="maskHandles" hidden></svg>
+        <svg id="areaHandles" hidden></svg>
+        <div id="cropbox" hidden>
+          <div id="cropgrid" class="thirds"></div>
+          <div id="cropcross" class="crosshair" hidden></div>
+          <i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i>
+        </div>
+      </div>
+      <div class="badge" id="badge" hidden>Before</div>
+      <button class="fs-btn" id="devFs" title="Fullscreen (⇧F)" aria-label="Fullscreen">⤢</button>
+      <div class="proposal" id="proposal" hidden>
+        <div class="proposal-head"><strong>Proposed edit</strong> <span id="proposalNote"></span></div>
+        <div class="proposal-actions">
+          <span class="seg">
+            <button data-compare="original" aria-pressed="false">Original <kbd>1</kbd></button>
+            <button data-compare="yours" aria-pressed="false">Your edit <kbd>2</kbd></button>
+            <button data-compare="proposed" aria-pressed="false">Proposed <kbd>3</kbd></button>
+          </span>
+          <button id="proposalAccept" class="primary">Accept</button>
+          <button id="proposalDiscard">Discard</button>
+        </div>
+      </div>
+      <div class="badge right" id="maskOffBadge" hidden>Masks hidden</div>
+      <div class="empty" id="devEmpty" hidden>Pick a frame in the Library, or choose one below.</div>
+    </div>
+    <aside class="panel" id="panel">
+      <div class="scope" id="scope">
+        <canvas id="hist" width="256" height="80" aria-label="Histogram" title="Click to show clipping on the photo (C)"></canvas>
+        <div class="readout">
+          <span id="readout">Point at the photo to read its colour</span>
+          <button id="clipBtn" aria-pressed="false" title="Show clipped highlights (red) and shadows (blue) on the photo (C)">Clipping <kbd>C</kbd></button>
+        </div>
+      </div>
+      <div class="meta"><span><span class="src-badge" id="devSource"></span><span id="devName">—</span></span><span id="devSize"></span></div>
+      <div class="row source-row" id="sourceRow">
+        <span class="hint">Develop from</span>
+        <span class="seg" id="sourceSeg">
+          <button data-source="raw" aria-pressed="false">RAW</button>
+          <button data-source="jpeg" aria-pressed="false">JPEG</button>
+        </span>
+      </div>
+      <p class="source-note" id="sourceNote" hidden>Edited on the JPEG before raw support. Switch to RAW to redo it from the raw file.</p>
+
+      <h3>Look</h3>
+      <div class="row" id="lookDrop" title="Drop .cube LUT files here to install">
+        <select id="look" aria-label="Look" title="Layered over this frame's own sliders, which adjust the photo underneath it"></select>
+        <button id="lookAdd">Add LUT…</button>
+        <input id="lutFile" type="file" accept=".cube" multiple hidden>
+        <button id="lookSave" title="Save this frame's own colour, tone and grain sliders as a look">Save…</button>
+        <button id="lookDelete" title="Delete the selected look">Delete</button>
+      </div>
+      <p class="source-note" id="lutStatus" role="status" hidden></p>
+      <div id="sliders-look" hidden></div>
+
+      <h3>Crop &amp; geometry <kbd>R</kbd></h3>
+      <div class="row">
+        <select id="aspect" aria-label="Aspect ratio">
+          <option value="free">Free</option>
+          <option value="orig">Original</option>
+          <option value="1.7778">16:9</option>
+          <option value="1.5">3:2</option>
+          <option value="1.25">5:4</option>
+          <option value="1">1:1</option>
+          <option value="0.8">4:5</option>
+          <option value="0.5625">9:16</option>
+        </select>
+        <button id="cropBtn" aria-pressed="false">Crop</button>
+        <button id="cropReset">Reset</button>
+      </div>
+      <div class="row">
+        <button id="gridBtn" aria-pressed="false" title="Cycle grid overlay (O)">Grid: off</button>
+        <button id="crossBtn" aria-pressed="false" title="Centre crosshair (X)">Crosshair</button>
+      </div>
+      <label class="check"><input type="checkbox" id="lensOn"> Lens profile <span id="lensInfo"></span></label>
+      <div id="sliders-geo"></div>
+      <div class="row turn-row">
+        <button data-turn="ccw" title="Turn left 90° (⌘[)" aria-label="Turn left 90°">⟲ 90°</button>
+        <button data-turn="cw" title="Turn right 90° (⌘])" aria-label="Turn right 90°">⟳ 90°</button>
+        <button data-turn="180" title="Turn 180°">180°</button>
+        <button data-turn="flipH" title="Mirror left–right" aria-label="Mirror left–right">⇋ Flip</button>
+        <button data-turn="flipV" title="Mirror top–bottom" aria-label="Mirror top–bottom">⇵ Flip</button>
+      </div>
+      <div class="row area-row">
+        <label class="check"><input type="checkbox" id="areaOn"> Shift only in an area</label>
+        <button id="areaEdit" aria-pressed="false" title="Show and drag the area's corners">Edit</button>
+        <button id="areaAdd" title="Add a corner on the longest edge">+ Point</button>
+        <button id="areaDel" title="Remove the selected corner">− Point</button>
+      </div>
+      <div id="sliders-area" hidden></div>
+
+      <h3>White balance</h3>
+      <div class="row"><button id="wbPick" aria-pressed="false">Pick neutral <kbd>W</kbd></button></div>
+      <div id="sliders-wb"></div>
+      <h3>Tone</h3>
+      <div id="sliders-tone"></div>
+      <h3>Tone curve</h3>
+      <div class="row curve-ch">
+        <span class="seg">
+          <button data-ch="rgb" aria-pressed="true">RGB</button>
+          <button data-ch="r" aria-pressed="false">Red</button>
+          <button data-ch="g" aria-pressed="false">Green</button>
+          <button data-ch="b" aria-pressed="false">Blue</button>
+        </span>
+        <button id="curveReset" title="Straighten this channel's curve">Reset</button>
+      </div>
+      <svg id="curve" viewBox="-4 -4 208 208" aria-label="Tone curve"></svg>
+      <p class="hint">Click to add a point, drag to move it, double-click to remove it.</p>
+      <h3>Presence</h3>
+      <div id="sliders-presence"></div>
+      <h3>Split toning</h3>
+      <div id="sliders-split"></div>
+      <h3>Detail</h3>
+      <div id="sliders-detail"></div>
+      <p class="hint">Raws start with light sharpening and colour noise reduction, like the camera's JPEG; these add to it. Judge sharpening on the export: the preview is downscaled.</p>
+      <h3>Effects</h3>
+      <div id="sliders-fx"></div>
+
+      <h3>Masks <kbd>M</kbd></h3>
+      <div class="row">
+        <button id="addLinear">+ Linear</button>
+        <button id="addRadial">+ Radial</button>
+        <button id="addRect">+ Rect</button>
+        <button id="addSubject" title="Brush over a subject; the mask finds its edges (B)">+ Subject</button>
+        <button id="maskShow" aria-pressed="false" title="Show the selected mask in red (M)">Show</button>
+        <button id="maskAll" aria-pressed="false" title="Preview with or without all masks (Shift+M)">Masks: on</button>
+      </div>
+      <div id="maskList"></div>
+      <div id="maskEdit" hidden>
+        <input type="text" id="maskName" class="mask-name" placeholder="Name this mask" maxlength="40" spellcheck="false" aria-label="Mask name">
+        <div class="row" id="brushRow" hidden>
+          <button id="brushBtn" aria-pressed="false" title="Paint over the subject (B)">Brush <kbd>B</kbd></button>
+          <button id="brushErase" aria-pressed="false" title="Paint what isn't the subject (hold ⌥ to switch while painting)">Erase <kbd>⌥</kbd></button>
+          <span class="busy" id="brushBusy" hidden>finding edges…</span>
+        </div>
+        <div class="slider" id="brushSizeRow" hidden>
+          <label for="brushSize" title="[ and ] resize">Brush size</label>
+          <input type="range" id="brushSize" min="0.5" max="25" step="0.5" value="4">
+          <span class="num" id="brushSizeOut"></span>
+        </div>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="maskInvert"> Invert</label>
+          <button id="maskDelete">Delete mask</button>
+        </div>
+        <div id="sliders-mask"></div>
+        <p class="hint">Drag the dots on the photo. Radial and rect: Shift keeps it round or square; drag a rect's top dot to turn it (Shift snaps to 15°). Falloff fades a rect from its top dot's end to the far end, like a beam of light. Range limits the mask to dark (low) or bright (high) areas. Subject: brush roughly over it, spill and all, and the mask snaps to its edges; Erase (or ⌥) marks what isn't it.</p>
+      </div>
+
+      <div class="actions">
+        <button id="copyBtn" title="Copy settings (⌘C)">Copy</button>
+        <button id="pasteBtn" title="Paste settings except crop (⌘V)">Paste</button>
+        <button id="resetBtn" title="Reset all (undo with ⌘Z)">Reset</button>
+      </div>
+      <div class="actions out-row">
+        <select id="exportScope" aria-label="What to export or send">
+          <option value="one">This photo</option>
+          <option value="all">All edited</option>
+        </select>
+        <button id="exportBtn" class="primary" title="Export to the day's export/ folder">Export</button>
+      </div>
+      <div class="actions send-row" id="dSendRow" hidden>
+        <button id="dSend" title="Export, then send to this destination">Send to</button>
+        <select id="dDevice" aria-label="Send destination"></select>
+      </div>
+      <p class="hint">O grid · X crosshair · M mask overlay · C clipping · ⇧M all masks · \ before/after · ←/→ frames · ⌘Z undo · double-click a slider to reset it</p>
+    </aside>
+  </div>
+  <div class="strip" id="strip"></div>
+</section>
+
+<section id="post" class="tab" role="tabpanel" hidden>
+  <div class="empty" id="postEmpty" hidden></div>
+  <div class="post" id="postBody">
+    <div class="slides-col">
+      <div class="slides-head"><strong id="postName"></strong> <span id="slideCount"></span></div>
+      <div class="slides" id="slides"></div>
+      <div id="unused" hidden>
+        <div class="hint">In the collection, not in the post:</div>
+        <div id="unusedList"></div>
+      </div>
+    </div>
+    <div class="pstage" id="pstage">
+      <canvas id="slideView"></canvas>
+      <button class="fs-btn" id="postFs" title="Fullscreen (⇧F)" aria-label="Fullscreen">⤢</button>
+    </div>
+    <aside class="panel" id="ppanel">
+      <h3>Post</h3>
+      <div class="row">
+        <label class="lbl" for="pAspect">Shape</label>
+        <select id="pAspect">
+          <option value="4:5">4:5 portrait</option>
+          <option value="1:1">1:1 square</option>
+          <option value="1.91:1">1.91:1 landscape</option>
+          <option value="9:16">9:16 story</option>
+        </select>
+      </div>
+      <div class="slider">
+        <label for="pGap">Gap</label>
+        <input type="range" id="pGap" min="0" max="120" step="1">
+        <output id="pGapOut"></output>
+      </div>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="pBorder"> Border around the edge</label>
+        <input type="color" id="pBg" aria-label="Background colour" title="Background colour">
+      </div>
+      <div class="swatches" id="swatches" aria-label="Background colours from these photos"></div>
+
+      <div class="row">
+        <button id="pGrid" aria-pressed="false" title="Grid in each tile (O)">Grid: off</button>
+        <button id="pCross" aria-pressed="false" title="Crosshair in each tile (X)">Crosshair</button>
+      </div>
+
+      <h3 id="slideTitle">Slide</h3>
+      <div class="layouts" id="layouts"></div>
+      <div id="cells"></div>
+      <p class="hint">Drag in a photo to reposition it; drag it onto another tile to swap them, or drag a photo from below the slides onto a tile. Drag the line between the big tile and the rest to resize. Pinch or ctrl-scroll to zoom. Click the selected tile again, the gap, or Esc to deselect. Fill → Square → Whole: Square shows a square crop in the middle of the tile, Whole the full photo, both with the background around them.</p>
+      <div class="actions">
+        <button id="pAdd">+ Slide</button>
+        <button id="pSplit" title="One slide per photo in this collage">Split</button>
+        <button id="pDelete">Delete</button>
+      </div>
+
+      <div class="actions">
+        <button id="pReset" title="Back to one photo per slide">Reset layouts</button>
+      </div>
+      <div class="actions out-row">
+        <select id="pScope" aria-label="What to export or send">
+          <option value="all">All slides</option>
+          <option value="one">This slide</option>
+        </select>
+        <button id="pExport" class="primary" title="Export to shoots/posts/ (one slide replaces only its own file)">Export</button>
+      </div>
+      <div class="actions send-row" id="sendRow" hidden>
+        <button id="pSend" title="Export, then send to this destination">Send to</button>
+        <select id="pDevice" aria-label="Send destination"></select>
+      </div>
+      <p class="hint">Exports 1080-wide JPEGs, numbered in order, to shoots/posts/. In a 9:16 story the shaded top and bottom sit under Instagram's own buttons: keep faces and text out of them. Drag slides on the left to reorder.</p>
+    </aside>
+  </div>
+</section>
+
+<div id="fs" hidden>
+  <canvas id="fsView"></canvas>
+  <canvas id="fsDrawn" hidden></canvas>
+  <div class="fs-ui">
+    <span><strong id="fsName"></strong> <span id="fsMeta"></span></span>
+    <span id="fsCount"></span>
+    <span class="hint" id="fsHint"></span>
+  </div>
+</div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

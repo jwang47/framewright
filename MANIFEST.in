@@ -1,0 +1,8 @@
+include README.md LICENSE THIRD_PARTY.md SECURITY.md CONTRIBUTING.md AGENTS.md CLAUDE.md pyproject.toml
+recursive-include framewright *.py *.js *.html *.css *.json *.wasm LICENSE* README.md
+recursive-include docs *.md *.json
+recursive-include docs/samples *.jpg *.png
+recursive-include tests *.py *.mjs
+recursive-include tools *.py
+include .githooks/pre-commit .github/workflows/checks.yml
+global-exclude __pycache__ *.py[cod] .DS_Store

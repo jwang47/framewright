@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "framewright"
+version = "0.1.0"
+description = "A local photo editor with plain-text recipes and live AI proposals"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY.md", "framewright/web/vendor/libraw/LICENSE*"]
+authors = [{name = "Framewright contributors"}]
+dependencies = []
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Topic :: Multimedia :: Graphics :: Editors",
+]
+
+[project.scripts]
+framewright = "framewright.__main__:main"
+
+[tool.setuptools]
+packages = ["framewright"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+framewright = ["web/*", "web/vendor/libraw/*", "recipe.schema.json", "looks.example.json"]

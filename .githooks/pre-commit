@@ -1,0 +1,6 @@
+#!/bin/sh
+# Opt in with: git config core.hooksPath .githooks
+if command -v python3 >/dev/null 2>&1; then
+    exec python3 tools/check_release.py --staged --all
+fi
+exec python tools/check_release.py --staged --all
