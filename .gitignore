@@ -58,9 +58,10 @@ Desktop.ini
 # export time of a post's slides (see studio.py)
 .exported
 
-# 3D LUTs — third-party and licensed for personal use only; never commit or
-# ship one
+# 3D LUTs and look profiles — third-party and licensed for personal use only;
+# never commit or ship one
 *.cube
+*.xmp
 
 *.3dl
 *.CUBE

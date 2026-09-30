@@ -25,6 +25,12 @@ class ContentTests(unittest.TestCase):
                        b"\xef\xbb\xbfLUT_3D_SIZE 33\n"):
             self.assertTrue(guard.violations("scripts/disguised.txt", header))
 
+    def test_look_profiles_are_rejected(self):
+        table = b'crs:' + b'Table_' + b'0123456789ABCDEF' * 2 + b'="abc"'
+        self.assertTrue(guard.violations("scripts/renamed.txt", table))
+        self.assertTrue(guard.violations("docs/film.xmp", b'crs:RGBTable="x"'))
+        self.assertFalse(guard.violations("framewright/web/render.js", b"xmpValue(xml, `Table_${digest}`)"))
+
     def test_parser_strings_and_documentation_are_not_headers(self):
         self.assertFalse(guard.violations("scripts/parser.py", b'if key == "LUT_3D_SIZE":\n'))
         self.assertFalse(guard.violations("README.md", b"Reject LUT_3D_SIZE headers.\n"))

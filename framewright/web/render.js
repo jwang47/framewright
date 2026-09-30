@@ -32,7 +32,8 @@ export function cleanLook(params) {
 // --- 3D LUTs ---------------------------------------------------------------------
 
 // A look can carry a 3D LUT: a .cube file in a configured LUT folder, by
-// name, sRGB in and sRGB out. It grades first, before the look's sliders.
+// name, sRGB in and sRGB out, or a Camera Raw look profile (.xmp) baked into
+// one. It grades first, before the look's sliders.
 // Files load once and are shared by every renderer on the page.
 const lutErrors = new Map();
 const lutWarnings = new Map();
@@ -70,6 +71,161 @@ export function parseCube(text) {
   return { size, data, min, max };
 }
 
+// A Camera Raw look profile (.xmp) carries its colour as an RGB table: a 3D
+// grid, in some RGB space and encoding, stored as Adobe's base-85 text over
+// zlib. It is decoded and baked, at the profile's own amount, into an
+// sRGB-in, sRGB-out LUT like a .cube file's. Other settings a profile may
+// carry (exposure, curves and so on) are not read.
+const XMP_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?`'|()[]{}@%$#";
+const XMP_DIGIT = new Int16Array(128).fill(-1);
+for (let i = 0; i < XMP_ALPHABET.length; i++) XMP_DIGIT[XMP_ALPHABET.charCodeAt(i)] = i;
+
+const XMP_LUT_SIZE = 48;   // the baked LUT's grid, finer than the usual 32 source
+
+function unescapeXml(s) {
+  return s.replace(/&(#x[\da-f]+|#\d+|quot|apos|lt|gt|amp);/gi, (_, e) =>
+    e[0] === '#' ? String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : +e.slice(1))
+      : { quot: '"', apos: "'", lt: '<', gt: '>', amp: '&' }[e.toLowerCase()]);
+}
+
+// Groups of five digits, least significant first, each giving four bytes
+// little-endian; a short last group gives one byte fewer than its digits.
+function decodeXmpTable(text) {
+  const out = new Uint8Array(Math.floor(text.length * 4 / 5) + 4);
+  let n = 0;
+  for (let i = 0; i < text.length; i += 5) {
+    const len = Math.min(5, text.length - i);
+    let v = 0;
+    for (let j = len - 1; j >= 0; j--) {
+      const d = XMP_DIGIT[text.charCodeAt(i + j)];
+      if (d < 0) throw new Error('bad character in RGB table');
+      v = v * 85 + d;
+    }
+    for (let j = 0; j < len - 1; j++) { out[n++] = v & 255; v = Math.floor(v / 256); }
+  }
+  return out.subarray(0, n);
+}
+
+async function inflateZlib(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function xmpValue(xml, name) {
+  const m = xml.match(new RegExp(`crs:${name}\\s*=\\s*"([^"]*)"`)) || xml.match(new RegExp(`<crs:${name}>([^<]*)</crs:${name}>`));
+  return m ? unescapeXml(m[1]) : null;
+}
+
+// --- colour spaces: [primaries] and [gamma] as the table names them ------------
+
+const WHITE_POINTS = { D65: [0.3127, 0.3290], D50: [0.3457, 0.3585] };
+const TABLE_PRIMARIES = [
+  { xy: [[0.64, 0.33], [0.30, 0.60], [0.15, 0.06]], white: 'D65' },            // sRGB
+  { xy: [[0.64, 0.33], [0.21, 0.71], [0.15, 0.06]], white: 'D65' },            // Adobe RGB
+  { xy: [[0.7347, 0.2653], [0.1596, 0.8404], [0.0366, 0.0001]], white: 'D50' }, // ProPhoto
+  { xy: [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]], white: 'D65' },      // Display P3
+  { xy: [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]], white: 'D65' },      // Rec. 2020
+];
+const srgbEncode = x => (x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1 / 2.4) - 0.055);
+const srgbDecode = x => (x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4));
+const powGamma = g => [x => Math.pow(Math.max(x, 0), 1 / g), x => Math.pow(Math.max(x, 0), g)];
+const TABLE_GAMMA = [
+  [x => x, x => x],                                                              // linear
+  [srgbEncode, srgbDecode],                                                      // sRGB
+  powGamma(1.8),
+  powGamma(2.2),
+  [x => (x < 0.018053968510807 ? 4.5 * x : 1.09929682680944 * Math.pow(x, 0.45) - 0.09929682680944),
+   x => (x < 0.081242858298635 ? x / 4.5 : Math.pow((x + 0.09929682680944) / 1.09929682680944, 1 / 0.45))], // Rec. 2020
+];
+
+const mulMat = (a, b) => a.map(r => [0, 1, 2].map(j => r[0] * b[0][j] + r[1] * b[1][j] + r[2] * b[2][j]));
+const mulVec = (m, v) => m.map(r => r[0] * v[0] + r[1] * v[1] + r[2] * v[2]);
+function invert3(m) {
+  const [[a, b, c], [d, e, f], [g, h, i]] = m;
+  const A = e * i - f * h, B = f * g - d * i, C = d * h - e * g, det = a * A + b * B + c * C;
+  return [[A, c * h - b * i, b * f - c * e], [B, a * i - c * g, c * d - a * f], [C, b * g - a * h, a * e - b * d]]
+    .map(r => r.map(x => x / det));
+}
+const xyToXyz = ([x, y]) => [x / y, 1, (1 - x - y) / y];
+function primariesToXyz({ xy, white }) {
+  const P = [0, 1, 2].map(i => [0, 1, 2].map(c => xyToXyz(xy[c])[i]));
+  const S = mulVec(invert3(P), xyToXyz(WHITE_POINTS[white]));
+  return P.map(r => r.map((x, c) => x * S[c]));
+}
+// Bradford adaptation between the two white points we need.
+const BRADFORD = [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]];
+function bradford(from, to) {
+  if (from === to) return [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  const s = mulVec(BRADFORD, xyToXyz(WHITE_POINTS[from])), d = mulVec(BRADFORD, xyToXyz(WHITE_POINTS[to]));
+  return mulMat(invert3(BRADFORD), mulMat([[d[0] / s[0], 0, 0], [0, d[1] / s[1], 0], [0, 0, d[2] / s[2]]], BRADFORD));
+}
+function srgbToPrimaries(p) {
+  const to = TABLE_PRIMARIES[p];
+  return mulMat(invert3(primariesToXyz(to)), mulMat(bradford('D65', to.white), primariesToXyz(TABLE_PRIMARIES[0])));
+}
+
+// --- the table ------------------------------------------------------------------
+
+// The decoded stream: tag 1 (RGB table), version 1, dimensions, divisions,
+// then every sample's three channels as 16-bit offsets from the identity,
+// blue varying fastest; then primaries, gamma, gamut, and the amount range.
+function readRgbTable(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let o = 0;
+  const u32 = () => { const v = dv.getUint32(o, true); o += 4; return v; };
+  if (u32() !== 1) throw new Error('not an RGB table');
+  if (u32() !== 1) throw new Error('unknown RGB table version');
+  const dims = u32();
+  if (dims !== 3) throw new Error(`${dims}D RGB tables are not supported`);
+  const n = u32();
+  if (!(n >= 2 && n <= 64)) throw new Error(`bad RGB table size ${n}`);
+  const nominal = i => Math.floor((i * 0xffff + ((n - 1) >> 1)) / (n - 1));
+  const table = new Float32Array(n ** 3 * 3);
+  for (let r = 0, k = 0; r < n; r++) for (let g = 0; g < n; g++) for (let b = 0; b < n; b++) {
+    for (const i of [r, g, b]) { table[k++] = ((dv.getUint16(o, true) + nominal(i)) & 0xffff) / 0xffff; o += 2; }
+  }
+  const primaries = o + 4 <= bytes.length ? u32() : 0;
+  const gamma = o + 4 <= bytes.length ? u32() : 1;
+  if (!TABLE_PRIMARIES[primaries]) throw new Error(`unknown RGB table primaries ${primaries}`);
+  if (!TABLE_GAMMA[gamma]) throw new Error(`unknown RGB table gamma ${gamma}`);
+  return { n, table, primaries, gamma };
+}
+
+function sampleTable({ n, table }, c) {
+  const p = c.map(x => Math.min(Math.max(x, 0), 1) * (n - 1));
+  const i = p.map(x => Math.min(Math.floor(x), n - 2)), f = p.map((x, k) => x - i[k]);
+  const out = [0, 0, 0];
+  for (let dr = 0; dr < 2; dr++) for (let dg = 0; dg < 2; dg++) for (let db = 0; db < 2; db++) {
+    const w = (dr ? f[0] : 1 - f[0]) * (dg ? f[1] : 1 - f[1]) * (db ? f[2] : 1 - f[2]);
+    const k = (((i[0] + dr) * n + i[1] + dg) * n + i[2] + db) * 3;
+    out[0] += w * table[k]; out[1] += w * table[k + 1]; out[2] += w * table[k + 2];
+  }
+  return out;
+}
+
+export async function parseXmpLook(xml) {
+  const digest = xmpValue(xml, 'RGBTable');
+  if (!digest) throw new Error('no RGB table in this profile');
+  const text = xmpValue(xml, `Table_${digest}`);
+  if (!text) throw new Error('RGB table data missing');
+  const raw = decodeXmpTable(text.replace(/\s+/g, ''));
+  const t = readRgbTable(await inflateZlib(raw.subarray(4)));
+  const amount = +(xmpValue(xml, 'RGBTableAmount') ?? 1);
+  if (!Number.isFinite(amount)) throw new Error('invalid RGB table amount');
+
+  const M = srgbToPrimaries(t.primaries), Mi = invert3(M);
+  const [enc, dec] = TABLE_GAMMA[t.gamma];
+  const N = XMP_LUT_SIZE, data = new Float32Array(N ** 3 * 3);
+  // A .cube's order: red varying fastest.
+  for (let b = 0, k = 0; b < N; b++) for (let g = 0; g < N; g++) for (let r = 0; r < N; r++) {
+    const c = mulVec(M, [r, g, b].map(x => srgbDecode(x / (N - 1)))).map(enc);
+    const s = sampleTable(t, c).map((y, i) => c[i] + (y - c[i]) * amount);
+    const out = mulVec(Mi, s.map(dec)).map(srgbEncode);
+    data[k++] = out[0]; data[k++] = out[1]; data[k++] = out[2];
+  }
+  return { size: N, data, min: [0, 0, 0], max: [1, 1, 1] };
+}
+
 export function loadLut(name, hash = '') {
   const key = lutKey(name, hash);
   if (!luts.has(key)) {
@@ -80,7 +236,7 @@ export function loadLut(name, hash = '') {
         if (warning) lutWarnings.set(key, warning);
         return r.text();
       })
-      .then(parseCube)
+      .then(text => (/\.xmp$/.test(name) ? parseXmpLook(text) : parseCube(text)))
       .then(lut => (lutErrors.delete(key), luts.set(key, lut), lut))
       .catch(e => { lutErrors.set(key, e.message); console.warn(`LUT ${name}: ${e.message}`); luts.set(key, null); return null; }));
   }

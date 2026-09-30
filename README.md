@@ -102,7 +102,7 @@ Library contents:
 <shoot>/store.json                 offloaded-file manifest
 looks.json                         saved looks
 collections.json                   ordered sets of frames
-luts/<name>.cube                   optional legacy LUT folder
+luts/<name>.cube|.xmp              optional legacy LUT folder
 .review/                           scratch review renders
 posts/<collection>/NN.jpg           exported post slides
 ```
@@ -147,6 +147,11 @@ the built-ins into the library's own `looks.json`, where you can edit/delete the
 Use **Add LUT…** or drop a `.cube` file on the look controls. The browser and
 server validate it, and installation copies it into the user LUT folder outside
 the app. Existing files with different content are not overwritten.
+
+Camera Raw / Lightroom look profiles (`.xmp` with an RGB table, such as many
+film-stock profiles) work the same way. The profile's RGB table is baked into
+an sRGB LUT at the profile's own amount; any other settings it carries
+(exposure, curves, and so on) are ignored, and 1D tables are not supported.
 
 Search order is `$STUDIO_LUTS` (platform-separated folder list), config `luts`,
 the user LUT folder, then `<library>/luts`. The user folder is
