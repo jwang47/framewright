@@ -54,7 +54,7 @@ def recipe_schema():
     look_properties = {key: properties[key] for key in LOOK_FIELDS if key in properties}
     look_properties.update({
         "curve": curve,
-        "lut": {"type": "string", "maxLength": 200, "pattern": r'^[^./\\<>:"|?*\x00-\x1f][^/\\<>:"|?*\x00-\x1f]*\.cube$'},
+        "lut": {"type": "string", "maxLength": 200, "pattern": r'^[^./\\<>:"|?*\x00-\x1f][^/\\<>:"|?*\x00-\x1f]*\.(cube|xmp)$'},
         "lutHash": {"type": "string", "pattern": r"^[0-9a-f]{16}$"},
     })
     masks = []

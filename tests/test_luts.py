@@ -183,5 +183,50 @@ class LutSafetyReviewTests(unittest.TestCase):
                 self.assertEqual(studio.read_looks(root), [])
 
 
+def xmp_profile(n=2, dims=3, amount='1', table=None):
+    """A synthetic look profile with an identity RGB table, encoded as Camera
+    Raw does. Test data only, never a real film profile."""
+    import struct
+    import zlib
+    from framewright.luts import XMP_ALPHABET
+    body = struct.pack('<4I', 1, 1, dims, n) + bytes(n ** 3 * 6) + struct.pack('<2I', 1, 3) if table is None else table
+    raw = struct.pack('<I', len(body)) + zlib.compress(body)
+    text = ''
+    for i in range(0, len(raw), 4):
+        chunk = raw[i:i + 4]
+        value = int.from_bytes(chunk, 'little')
+        for _ in range(len(chunk) + 1):
+            text += XMP_ALPHABET[value % 85]
+            value //= 85
+    text = text.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
+    digest = '0123456789ABCDEF' * 2
+    return (f'<x:xmpmeta><rdf:RDF><rdf:Description crs:RGBTable="{digest}" crs:{"Table"}_{digest}="{text}" '
+            f'crs:RGBTableAmount="{amount}"/></rdf:RDF></x:xmpmeta>').encode()
+
+
+class LookProfileTests(unittest.TestCase):
+    def test_profiles_validate_list_and_install_beside_cubes(self):
+        from framewright.luts import install_lut, validate_lut
+        validate_lut('look.xmp', xmp_profile())
+        validate_lut('look.xmp', xmp_profile(n=32, amount='0.9'))
+        for bad in (b'<x:xmpmeta/>', xmp_profile(dims=1), xmp_profile(amount='nan'),
+                    xmp_profile(table=b'\x01\x00\x00\x00'), xmp_profile().replace(b'crs:Table', b'crs:Tabel')):
+            with self.assertRaises(ValueError):
+                validate_lut('look.xmp', bad)
+        with self.assertRaises(ValueError):
+            validate_lut('look.cube', xmp_profile())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app, user = root / 'app', root / 'user'
+            install_lut(user, 'Film.xmp', xmp_profile(), app)
+            (user / 'shoot.ARW.xmp').mkdir()
+            (user / 'notes.txt').write_text('x')
+            with self.assertRaises(ValueError):
+                install_lut(user, 'Other.xmp', b'<x:xmpmeta/>', app)
+            with patch.object(studio, 'lut_directories', return_value=[user]):
+                self.assertEqual(studio.list_luts(root), ['Film.xmp'])
+            self.assertEqual(studio.clean_look({'lut': 'Film.xmp'}), {'lut': 'Film.xmp'})
+
+
 if __name__ == '__main__':
     unittest.main()

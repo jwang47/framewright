@@ -20,7 +20,7 @@ The following checks exercise real camera/OS behavior that fixtures cannot prove
   should appear live. Compare, discard, create again and accept. The accepted
   edit must remain unchanged until acceptance.
 - [ ] **Looks:** try built-ins, save/delete a custom look, and restart. Add and
-  drag in a user-owned `.cube`; confirm it goes to the configured user folder,
+  drag in a user-owned `.cube` and a Camera Raw look profile `.xmp`; confirm it goes to the configured user folder,
   not the checkout. Rename the LUT on disk and reload: a fingerprinted recipe
   should still resolve it. Remove it: the menu/Develop/render output should
   warn. A different file under the old name should produce a mismatch warning.

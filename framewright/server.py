@@ -21,7 +21,8 @@ Everything that is actual work lands on disk as text, next to the frames:
                                           including whole days by date range
     shoots/looks.json                     looks: named colour, tone and grain
                                           settings to apply to any frame
-    shoots/luts/<name>.cube               3D LUTs (sRGB in and out), each one
+    shoots/luts/<name>.cube               3D LUTs (sRGB in and out), and
+    shoots/luts/<name>.xmp                Camera Raw look profiles, each one
                                           offered as a look of its own. Not
                                           tracked: user-supplied content
 
@@ -82,7 +83,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .luts import HASH_PATTERN, MAX_LUT_BYTES, install_lut, lut_hash, valid_name
+from .luts import HASH_PATTERN, LUT_SUFFIXES, MAX_LUT_BYTES, install_lut, lut_hash, valid_name
 from .photo_index import PhotoIndex
 from .lenses import profile_for  # noqa: E402
 from .settings import lut_directories, user_lut_directory  # noqa: E402
@@ -467,13 +468,18 @@ def write_looks(root: Path, looks: list[dict]) -> None:
     atomic_write(root / LOOKS_FILE, json.dumps({"looks": looks}, indent=2) + "\n")
 
 
+def lut_paths(directory: Path) -> list[Path]:
+    """The LUT files directly in a directory, .cube and .xmp."""
+    return [p for p in directory.iterdir() if p.suffix in LUT_SUFFIXES and p.is_file()] if directory.is_dir() else []
+
+
 def lut_files(root: Path) -> dict[str, Path]:
     """Installed LUTs by name; the first configured directory wins."""
     found = {}
     for directory in lut_directories(root):
         if directory.is_dir():
-            for path in directory.glob("*.cube"):
-                if path.is_file() and valid_name(path.name):
+            for path in lut_paths(directory):
+                if valid_name(path.name):
                     found.setdefault(path.name, path)
     return found
 
@@ -487,8 +493,8 @@ def resolve_lut(root: Path, name: str, fingerprint: str = "") -> tuple[Path | No
         return None, ""
     if fingerprint:
         for directory in lut_directories(root):
-            for path in directory.glob("*.cube"):
-                if path.is_file() and lut_hash(path.read_bytes()) == fingerprint:
+            for path in lut_paths(directory):
+                if lut_hash(path.read_bytes()) == fingerprint:
                     return path, ""
     path = lut_files(root).get(name)
     return path, "LUT fingerprint mismatch; rendered with the file found by name" if path and fingerprint else ""
@@ -518,7 +524,7 @@ def clean_look(params: object) -> dict:
     lut = params.get("lut")
     if lut is not None:
         if not valid_name(lut):
-            raise ValueError("lut must be a safe .cube filename")
+            raise ValueError("lut must be a safe .cube or .xmp filename")
         out["lut"] = lut
     fingerprint = params.get("lutHash")
     if fingerprint is not None:

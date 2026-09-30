@@ -32,6 +32,8 @@ IMAGE_SUFFIXES = {
 }
 PNG = b"\x89PNG\r\n\x1a\n"
 LUT_HEADER = re.compile(rb"(?mi)^[ \t]*(?:\xef\xbb\xbf)?LUT_3D_SIZE[ \t]+[0-9]+(?:[ \t]*(?:#[^\r\n]*)?)?\r?$")
+# The encoded colour table of a Camera Raw look profile, whatever the file is called.
+PROFILE_TABLE = re.compile(rb"crs:Table_[0-9A-Fa-f]{32}\s*=\s*\"|<crs:Table_[0-9A-Fa-f]{32}>")
 
 
 def is_public(path):
@@ -68,6 +70,8 @@ def violations(path, data):
         errors.append("LUT files must stay outside the release")
     if LUT_HEADER.search(data):
         errors.append("contains a LUT_3D_SIZE header (possibly a renamed LUT)")
+    if suffix == ".xmp" and b"crs:RGBTable" in data or PROFILE_TABLE.search(data):
+        errors.append("contains a Camera Raw profile colour table (a film look)")
     if hald_png(data) or (suffix == ".png" and re.search(r"hald|clut", path, re.I)):
         errors.append("possible Hald CLUT PNG; Hald-compatible dimensions are prohibited")
     if (suffix in IMAGE_SUFFIXES or image_bytes(data)) and not path.startswith("docs/samples/"):

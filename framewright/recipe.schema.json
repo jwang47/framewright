@@ -955,7 +955,7 @@
                 "lut": {
                   "type": "string",
                   "maxLength": 200,
-                  "pattern": "^[^./\\\\<>:\"|?*\\x00-\\x1f][^/\\\\<>:\"|?*\\x00-\\x1f]*\\.cube$"
+                  "pattern": "^[^./\\\\<>:\"|?*\\x00-\\x1f][^/\\\\<>:\"|?*\\x00-\\x1f]*\\.(cube|xmp)$"
                 },
                 "lutHash": {
                   "type": "string",

@@ -2,7 +2,7 @@
 import {
   Renderer, normalize, cropValid, fitCrop, renderJpeg, FULL_CROP,
   MAX_MASKS, newMask, orientedSize, reorient, DEFAULTS, putMaskImage, IDENTITY_MAP,
-  CURVE_CHANNELS, IDENTITY_CURVE, cleanCurve, curveFn, LOOK_KEYS, cleanLook, lutWarning, parseCube, clearLutCache,
+  CURVE_CHANNELS, IDENTITY_CURVE, cleanCurve, curveFn, LOOK_KEYS, cleanLook, lutWarning, parseCube, parseXmpLook, clearLutCache,
 } from './render.js';
 import { sourceOf, loadSource, prefetch, release, paintSourceTag, SOURCE_LABEL } from './source.js';
 
@@ -930,8 +930,9 @@ export function createDevelop(app) {
   async function addLuts(files) {
     for (const file of files) {
       try {
-        if (!file.name.endsWith('.cube') || file.size > 64 * 1024 * 1024) throw new Error('choose a .cube file up to 64 MiB');
-        parseCube(await file.text());
+        const xmp = file.name.endsWith('.xmp');
+        if (!(xmp || file.name.endsWith('.cube')) || file.size > 64 * 1024 * 1024) throw new Error('choose a .cube or .xmp file up to 64 MiB');
+        await (xmp ? parseXmpLook : parseCube)(await file.text());
         const response = await fetch(`/api/luts/install?name=${encodeURIComponent(file.name)}`, {
           method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file,
         });
