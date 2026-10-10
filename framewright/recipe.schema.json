@@ -69,6 +69,31 @@
       "minimum": 0.0,
       "maximum": 100.0
     },
+    "grainRoughness": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 100.0
+    },
+    "grainColor": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 100.0
+    },
+    "halation": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 100.0
+    },
+    "halationSize": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 100.0
+    },
+    "bloom": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 100.0
+    },
     "sharpen": {
       "type": "number",
       "minimum": 0.0,
@@ -850,6 +875,31 @@
                   "maximum": 100.0
                 },
                 "grainSize": {
+                  "type": "number",
+                  "minimum": 0.0,
+                  "maximum": 100.0
+                },
+                "grainRoughness": {
+                  "type": "number",
+                  "minimum": 0.0,
+                  "maximum": 100.0
+                },
+                "grainColor": {
+                  "type": "number",
+                  "minimum": 0.0,
+                  "maximum": 100.0
+                },
+                "halation": {
+                  "type": "number",
+                  "minimum": 0.0,
+                  "maximum": 100.0
+                },
+                "halationSize": {
+                  "type": "number",
+                  "minimum": 0.0,
+                  "maximum": 100.0
+                },
+                "bloom": {
                   "type": "number",
                   "minimum": 0.0,
                   "maximum": 100.0
