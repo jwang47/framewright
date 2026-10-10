@@ -261,7 +261,8 @@ def progress_lines(event: dict) -> list[str]:
                 out.append(f"not allowed: {denial.get('tool_name', 'a tool')}")
         turns = event.get("num_turns")
         if event.get("is_error") or event.get("subtype") not in (None, "success"):
-            out.append(f"Claude Code stopped: {event.get('subtype') or 'error'}"
+            subtype = event.get("subtype")
+            out.append(f"Claude Code stopped: {subtype if subtype not in (None, 'success') else 'error'}"
                        + (f" ({str(event.get('result'))[:160]})" if event.get("result") else ""))
         else:
             out.append(f"finished in {turns} turns" if turns else "finished")
