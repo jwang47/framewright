@@ -52,6 +52,20 @@ class PhotoIndexTests(unittest.TestCase):
         (self.day / 'raw' / 'first.JPG').unlink()
         self.assertEqual(set(self.index.get(self.day).sources), {'renamed'})
 
+    def test_add_and_rename_are_noticed_when_directory_stamp_is_unchanged(self):
+        # NTFS, with its ~16 ms clock tick, can report the same directory
+        # mtime before and after an entry is added or renamed.
+        self.photo('first.JPG')
+        with patch('framewright.photo_index.stamp', return_value=(1, 2, 3, 4, 0)):
+            self.index.get(self.day)
+            second = self.photo('second.JPG')
+            self.assertEqual(set(self.index.get(self.day).sources), {'first', 'second'})
+            second.rename(second.with_name('renamed.JPG'))
+            self.assertEqual(set(self.index.get(self.day).sources), {'first', 'renamed'})
+            self.assertEqual(self.scan.call_count, 3)
+            self.index.get(self.day)
+            self.assertEqual(self.scan.call_count, 3)
+
     def test_offload_manifest_and_store_configuration_refresh(self):
         self.photo('local.JPG')
         first = self.index.get(self.day)
