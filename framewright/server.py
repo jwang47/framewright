@@ -138,6 +138,11 @@ EDIT_RANGES = {
     "vignette": (-100.0, 100.0),
     "grain": (0.0, 100.0),
     "grainSize": (0.0, 100.0),
+    "grainRoughness": (0.0, 100.0),   # clumping, and a finer layer of grain
+    "grainColor": (0.0, 100.0),       # each dye layer's own grain, not one for all
+    "halation": (0.0, 100.0),         # red glow bleeding round bright highlights
+    "halationSize": (0.0, 100.0),
+    "bloom": (0.0, 100.0),            # the same glow, neutral
     "sharpen": (0.0, 100.0),
     "sharpenRadius": (0.0, 3.0),
     "noise": (0.0, 100.0),
@@ -162,7 +167,8 @@ EDIT_RANGES = {
 # A recipe holds its look as a copy, {"name", "params"}, layered over the
 # recipe's own settings, with lookAmount (0..100, default 100) mixing it in.
 LOOK_FIELDS = ("temp", "tint", "contrast", "highlights", "shadows", "whites", "blacks",
-               "vibrance", "saturation", "vignette", "grain", "grainSize", "curve",
+               "vibrance", "saturation", "vignette", "grain", "grainSize", "grainRoughness",
+               "grainColor", "halation", "halationSize", "bloom", "curve",
                "splitShadowHue", "splitShadowSat", "splitHighlightHue", "splitHighlightSat",
                "splitBalance", "lut", "lutHash")
 
@@ -464,6 +470,15 @@ def read_looks(root: Path) -> list[dict]:
     return json.loads(path.read_text(encoding="utf-8")).get("looks", []) if path.is_file() else []
 
 
+def film_presets() -> list[dict]:
+    """The built-in film presets: Framewright's own, not derived from any
+    third-party profile. Read-only; a saved look of the same name is separate."""
+    path = HERE / "film-presets.json"
+    if not path.is_file():
+        return []
+    return [{**p, "preset": True} for p in json.loads(path.read_text(encoding="utf-8")).get("looks", [])]
+
+
 def write_looks(root: Path, looks: list[dict]) -> None:
     atomic_write(root / LOOKS_FILE, json.dumps({"looks": looks}, indent=2) + "\n")
 
@@ -501,7 +516,8 @@ def resolve_lut(root: Path, name: str, fingerprint: str = "") -> tuple[Path | No
 
 
 def all_looks(root: Path) -> list[dict]:
-    """Saved looks with availability metadata, then fingerprinted LUT files."""
+    """Saved looks with availability metadata, the film presets, then
+    fingerprinted LUT files."""
     looks = []
     for look in read_looks(root):
         params = look.get("params", {})
@@ -509,7 +525,7 @@ def all_looks(root: Path) -> list[dict]:
         path, warning = resolve_lut(root, name, params.get("lutHash", "")) if name else (None, "")
         flags = {"missingLut": name} if name and path is None else {"lutMismatch": True} if warning else {}
         looks.append({**look, **flags})
-    return looks + [{"name": Path(n).stem, "params": {"lut": n, "lutHash": lut_hash(path.read_bytes())}, "file": True}
+    return looks + film_presets() + [{"name": Path(n).stem, "params": {"lut": n, "lutHash": lut_hash(path.read_bytes())}, "file": True}
                     for n, path in sorted(lut_files(root).items(), key=lambda item: item[0].lower())]
 
 
@@ -792,11 +808,19 @@ def clean_edit(params: object) -> dict:
         out.pop("horizon", None)
     if "groundArea" not in out:
         out.pop("groundFeather", None)
-    # Grain size defaults to 25 and only matters with some grain.
+    # Grain size defaults to 25 and only matters with some grain, as do its
+    # roughness and colour.
     if "grain" not in out:
         out.pop("grainSize", None)
+        out.pop("grainRoughness", None)
+        out.pop("grainColor", None)
     elif "grainSize" not in out:
         out["grainSize"] = 0.0 if params.get("grainSize") == 0 else 25.0
+    # The glow's size defaults to 30 and only matters with halation or bloom.
+    if "halation" not in out and "bloom" not in out:
+        out.pop("halationSize", None)
+    elif "halationSize" not in out:
+        out["halationSize"] = 0.0 if params.get("halationSize") == 0 else 30.0
     # The sharpening radius defaults to 1 and only matters with sharpening.
     if "sharpen" not in out:
         out.pop("sharpenRadius", None)

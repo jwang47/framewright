@@ -16,7 +16,8 @@ export const SYNC_GROUPS = [
   { id: 'curve', label: 'Tone curve', keys: ['curve'], on: true },
   { id: 'split', label: 'Split toning',
     keys: ['splitShadowHue', 'splitShadowSat', 'splitHighlightHue', 'splitHighlightSat', 'splitBalance'], on: true },
-  { id: 'effects', label: 'Vignette and grain', keys: ['vignette', 'grain', 'grainSize'], on: true },
+  { id: 'effects', label: 'Vignette, grain and halation',
+    keys: ['vignette', 'grain', 'grainSize', 'grainRoughness', 'grainColor', 'halation', 'halationSize', 'bloom'], on: true },
   { id: 'detail', label: 'Sharpening and noise', keys: ['sharpen', 'sharpenRadius', 'noise', 'colorNoise'], on: false },
   { id: 'lens', label: 'Lens correction', keys: ['lens', 'distortion'], on: false },
 ];

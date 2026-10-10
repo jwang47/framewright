@@ -4,6 +4,7 @@
 export const DEFAULTS = {
   exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
   temp: 0, tint: 0, vibrance: 0, saturation: 0, vignette: 0, grain: 0, grainSize: 25, angle: 0,
+  grainRoughness: 0, grainColor: 0, halation: 0, halationSize: 30, bloom: 0,
   sharpen: 0, sharpenRadius: 1, noise: 0, colorNoise: 0,
   curve: null, splitShadowHue: 0, splitShadowSat: 0, splitHighlightHue: 0, splitHighlightSat: 0, splitBalance: 0,
   vertical: 0, horizontal: 0, distortion: 0, groundShift: 0, skyShift: 0, horizon: 50,
@@ -18,7 +19,8 @@ export const DEFAULTS = {
 // the frame's sliders correct the photo underneath and the look grades the
 // result, so tweaking one never changes the other.
 export const LOOK_KEYS = ['temp', 'tint', 'contrast', 'highlights', 'shadows', 'whites', 'blacks',
-  'vibrance', 'saturation', 'vignette', 'grain', 'grainSize', 'curve',
+  'vibrance', 'saturation', 'vignette', 'grain', 'grainSize', 'grainRoughness', 'grainColor',
+  'halation', 'halationSize', 'bloom', 'curve',
   'splitShadowHue', 'splitShadowSat', 'splitHighlightHue', 'splitHighlightSat', 'splitBalance', 'lut', 'lutHash'];
 
 // A look's settings: only the look fields, with the curve tidied.
@@ -490,6 +492,12 @@ uniform highp sampler3D lut;           // sRGB in, sRGB out
 uniform vec3 lutMin, lutScale;         // the file's domain
 uniform float lutSize;
 uniform float grain, grainSize;   // 0..1
+uniform float grainRough, grainColor;  // 0..1: clumping and a finer layer; each dye layer's own grain
+// Halation and bloom: a blurred image of the highlights (glowTex, built by
+// the glow passes in the stored image's frame), added back at exposure.
+uniform int useGlow;
+uniform sampler2D glowTex;
+uniform float halation, bloom;    // 0..1
 uniform float pxSize;             // one output pixel, in frame long sides
 uniform float seed;
 uniform int linearSrc;       // 1: the source is decoded raw, already linear
@@ -523,6 +531,7 @@ const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 const float KEYSTONE = 0.6;   // slider 100 -> strength of the perspective tilt
 const float LENS = 0.25;      // slider 100 -> radial correction at the corners
 const float GROUND = 0.2;     // slider 100 -> bottom edge moves a fifth of the width
+const vec3 HALATION = vec3(1.0, 0.3, 0.1);   // its colour at full strength
 
 vec3 toLinear(vec3 c) {
   return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
@@ -667,18 +676,42 @@ float valueNoise(vec2 p) {
   return mix(mix(lattice(i), lattice(i + vec2(1.0, 0.0)), f.x),
              mix(lattice(i + vec2(0.0, 1.0)), lattice(i + vec2(1.0, 1.0)), f.x), f.y);
 }
+// One layer of grain at grid point g: two octaves of value noise; with
+// roughness, a slow clumping term and a finer octave on top.
+float grainNoise(vec2 g, float off) {
+  float n = 0.8 * valueNoise(g + off) + 0.5 * valueNoise(g * 1.93 + 17.3 + off);
+  if (grainRough > 0.0) {
+    // Grains clump: a slow term swells and thins the grain, a coarse octave
+    // adds blotches a few grains across, and a fine one roughens the edges.
+    float clump = valueNoise(g * 0.37 + 41.0 + off);
+    n = n * (1.0 + grainRough * 0.9 * clump) + grainRough * (0.5 * valueNoise(g * 0.5 + 7.1 + off)
+        + 0.25 * valueNoise(g * 3.7 + 3.3 + off));
+  }
+  return n;
+}
 vec3 filmGrain(vec3 rgb, vec2 q) {
   float cell = mix(0.0002, 0.0012, grainSize);
   float s = max(cell, pxSize);
   vec2 g = q / s;
-  float n = 0.8 * valueNoise(g) + 0.5 * valueNoise(g * 1.93 + 17.3);
-  n *= min(1.0, cell / pxSize);
+  float fade = min(1.0, cell / pxSize);
+  float n = grainNoise(g, 0.0) * fade;
   // Strongest in the midtones, as on film; a little left in the shadows.
   float Y = dot(rgb, LUMA);
   float P = pow(max(Y, 0.0), 1.0 / 2.2);
   float P2 = max(0.0, P + grain * 0.16 * n * (0.3 + 2.8 * P * (1.0 - P)));
   float Y2 = pow(P2, 2.2);
-  return Y > 1e-6 ? rgb * (Y2 / Y) : vec3(Y2);
+  vec3 mono = Y > 1e-6 ? rgb * (Y2 / Y) : vec3(Y2);
+  if (grainColor <= 0.0) return mono;
+  // Colour film has three emulsion layers, each with its own grain: keep the
+  // brightness grain above and add each layer's difference from it, as
+  // colour speckle that is strongest in the shadows, as in scans.
+  vec3 nc = vec3(grainNoise(g, 61.0), grainNoise(g, 113.0), grainNoise(g, 229.0)) * fade;
+  nc -= dot(nc, LUMA);
+  vec3 Pm = pow(max(mono, 0.0), vec3(1.0 / 2.2));
+  // Fade it out towards black, where clipping would leave only the positive
+  // half and tint the shadows.
+  vec3 Pc = max(vec3(0.0), Pm + grainColor * grain * 0.32 * nc * (0.6 + 1.6 * (1.0 - Pm)) * clamp(Pm * 4.0, 0.0, 1.0));
+  return pow(Pc, vec3(2.2));
 }
 
 // How much of the ground shift applies at pixel p: 1 inside the area polygon,
@@ -840,6 +873,9 @@ void main() {
   if (useProfile == 1) rgb = max(camMatrix * rgb, 0.0);
 
   rgb = whiteBalance(rgb, temp, tint) * exp2(exposure);
+  // Halation: light through the film base reflects back into the red layer,
+  // a warm glow round bright highlights. Bloom is the same glow, neutral.
+  if (useGlow == 1) rgb += texture(glowTex, t).rgb * (halation * HALATION + bloom * 0.6);
   if (useProfile == 1) {
     // The camera's tone curve, after exposure so pulling exposure down brings
     // back highlights the JPEG had already clipped.
@@ -895,6 +931,69 @@ void main() {
   color = vec4(outc, 1.0);
 }`;
 
+// --- halation and bloom -----------------------------------------------------------
+
+// The glow: the frame's highlights, shrunk and blurred, in the stored image's
+// own frame so the main shader samples it at the same point as the source.
+// Built only when the source, exposure or glow size change.
+export function glowSigma(size, w, h) {
+  return (0.003 + 0.022 * size / 100) * Math.max(w, h);   // source pixels
+}
+export function glowScale(sigma) {
+  return Math.max(1, Math.floor(sigma / 4));   // source pixels per glow pixel
+}
+
+const GLOW_EXTRACT = `#version 300 es
+precision highp float;
+out vec4 color;
+uniform sampler2D img;
+uniform vec2 srcSize;      // stored image, pixels
+uniform vec2 glowSize;     // this target, pixels
+uniform float exposure;
+uniform int linearSrc;
+uniform int useProfile;
+uniform mat3 camMatrix;
+vec3 toLinear(vec3 c) {
+  return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+}
+void main() {
+  // Rows top first, like the source texture.
+  vec2 t = gl_FragCoord.xy / glowSize;
+  vec2 cell = 1.0 / glowSize;
+  vec3 sum = vec3(0.0);
+  for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+    vec2 u = t + (vec2(float(i), float(j)) - 1.5) * 0.25 * cell;
+    vec3 c = texture(img, u).rgb;
+    c = linearSrc == 1 ? c : toLinear(c);
+    if (useProfile == 1) c = max(camMatrix * c, 0.0);
+    sum += c;
+  }
+  vec3 c = sum / 16.0 * exp2(exposure);
+  float m = max(c.r, max(c.g, c.b));
+  color = vec4(c * smoothstep(0.55, 1.0, m), 1.0);
+}`;
+
+const GLOW_BLUR = `#version 300 es
+precision highp float;
+out vec4 color;
+uniform sampler2D src;
+uniform vec2 glowSize;
+uniform vec2 dir;          // one glow pixel along x or y
+uniform float sigma;       // in glow pixels
+void main() {
+  vec2 t = gl_FragCoord.xy / glowSize;
+  int r = int(min(ceil(3.0 * sigma), 24.0));
+  vec3 sum = vec3(0.0);
+  float wsum = 0.0;
+  for (int i = -24; i <= 24; i++) {
+    if (i < -r || i > r) continue;
+    float w = exp(-float(i * i) / (2.0 * sigma * sigma));
+    sum += w * texture(src, t + dir * float(i) / glowSize).rgb;
+    wsum += w;
+  }
+  color = vec4(sum / wsum, 1.0);
+}`;
+
 function compile(gl, type, src) {
   const s = gl.createShader(type);
   gl.shaderSource(s, src);
@@ -914,6 +1013,8 @@ export class Renderer {
     const prog = gl.createProgram();
     gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT));
     gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG));
+    // Every program shares the one quad on attribute 0.
+    gl.bindAttribLocation(prog, 0, 'pos');
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     this.prog = prog;
@@ -936,7 +1037,7 @@ export class Renderer {
     this.u = {};
     for (const name of ['img', 'srcSize', 'crop', 'viewport', 'angle', 'vertical', 'horizontal', 'distortion', 'groundShift', 'skyShift', 'horizon', 'areaCount', 'areaPts', 'areaFeather', 'lensK', 'lensScale', 'orient', 'flipH', 'flipV', 'maskCount', 'maskType', 'maskGeo', 'maskShift',
       'maskTex0', 'maskTex1', 'maskTex2', 'maskTex3', 'maskTex4', 'maskTex5', 'maskTex6', 'maskTex7', 'maskAngle', 'maskFalloff', 'maskOpt', 'maskAdjA', 'maskAdjB', 'showMask', 'exposure', 'contrast', 'highlights',
-      'shadows', 'whites', 'blacks', 'temp', 'tint', 'vibrance', 'saturation', 'vignette', 'grain', 'grainSize', 'pxSize', 'seed', 'curveLut', 'useCurve', 'splitShadow', 'splitHigh', 'splitPivot', 'useLook', 'lookAmount', 'lookWb', 'lookTone', 'lookBlacks', 'lookPresence', 'lookCurve', 'lookSplitShadow', 'lookSplitHigh', 'lookSplitPivot', 'useLut', 'lut', 'lutMin', 'lutScale', 'lutSize', 'linearSrc', 'useProfile', 'camMatrix', 'baseCurve', 'baseLog', 'useWarp', 'warpKr', 'warpCentre', 'sharpen', 'sharpenRadius', 'noiseLuma', 'noiseColor']) {
+      'shadows', 'whites', 'blacks', 'temp', 'tint', 'vibrance', 'saturation', 'vignette', 'grain', 'grainSize', 'grainRough', 'grainColor', 'useGlow', 'glowTex', 'halation', 'bloom', 'pxSize', 'seed', 'curveLut', 'useCurve', 'splitShadow', 'splitHigh', 'splitPivot', 'useLook', 'lookAmount', 'lookWb', 'lookTone', 'lookBlacks', 'lookPresence', 'lookCurve', 'lookSplitShadow', 'lookSplitHigh', 'lookSplitPivot', 'useLut', 'lut', 'lutMin', 'lutScale', 'lutSize', 'linearSrc', 'useProfile', 'camMatrix', 'baseCurve', 'baseLog', 'useWarp', 'warpKr', 'warpCentre', 'sharpen', 'sharpenRadius', 'noiseLuma', 'noiseColor']) {
       this.u[name] = gl.getUniformLocation(prog, name);
     }
     this.lut = gl.createTexture();
@@ -984,11 +1085,100 @@ export class Renderer {
       this.maskTexUrl.push(null);
     }
     gl.activeTexture(gl.TEXTURE0);
+    this.setupGlow();
     this.lutName = undefined;
     this.renders = 0;
     this.profile = null;
     this.warp = null;
     this.w = this.h = 0;
+  }
+
+  // Halation and bloom: two programs and two small textures, on unit 12 (4..11
+  // are the masks'). Float targets when the GPU can render to them.
+  setupGlow() {
+    const gl = this.gl;
+    this.glowFloat = !!gl.getExtension('EXT_color_buffer_float');
+    const program = frag => {
+      const p = gl.createProgram();
+      gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, VERT));
+      gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, frag));
+      gl.bindAttribLocation(p, 0, 'pos');
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+      const u = {};
+      for (const n of ['img', 'src', 'srcSize', 'glowSize', 'exposure', 'linearSrc', 'useProfile', 'camMatrix', 'dir', 'sigma']) {
+        u[n] = gl.getUniformLocation(p, n);
+      }
+      return { p, u };
+    };
+    this.glowExtract = program(GLOW_EXTRACT);
+    this.glowBlur = program(GLOW_BLUR);
+    this.glowTex = [0, 1].map(() => {
+      const t = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE12);
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+      return t;
+    });
+    this.glowFb = gl.createFramebuffer();
+    gl.activeTexture(gl.TEXTURE0);
+    this.glowKey = null;
+    this.imageId = 0;
+  }
+
+  // Builds the glow texture (left on unit 12) for this source and exposure.
+  buildGlow(exposure, size) {
+    const key = `${this.imageId}|${exposure}|${size}`;
+    if (key === this.glowKey) return;
+    this.glowKey = key;
+    const gl = this.gl;
+    const sigma = glowSigma(size, this.w, this.h), d = glowScale(sigma);
+    const gw = Math.max(1, Math.ceil(this.w / d)), gh = Math.max(1, Math.ceil(this.h / d));
+    const fmt = this.glowFloat ? [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT] : [gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE];
+    for (const t of this.glowTex) {
+      gl.activeTexture(gl.TEXTURE12);
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, fmt[0], gw, gh, 0, fmt[1], fmt[2], null);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.glowFb);
+    gl.viewport(0, 0, gw, gh);
+    const target = i => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.glowTex[i], 0);
+    // Highlights into texture 0.
+    const ex = this.glowExtract;
+    gl.useProgram(ex.p);
+    target(0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.uniform1i(ex.u.img, 0);
+    gl.uniform2f(ex.u.srcSize, this.w, this.h);
+    gl.uniform2f(ex.u.glowSize, gw, gh);
+    gl.uniform1f(ex.u.exposure, exposure);
+    gl.uniform1i(ex.u.linearSrc, this.linear ? 1 : 0);
+    gl.uniform1i(ex.u.useProfile, this.profile ? 1 : 0);
+    if (this.profile) gl.uniformMatrix3fv(ex.u.camMatrix, true, this.profile.matrix.flat());
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    // Blur across into texture 1, then down back into texture 0.
+    const bl = this.glowBlur;
+    gl.useProgram(bl.p);
+    gl.uniform2f(bl.u.glowSize, gw, gh);
+    gl.uniform1f(bl.u.sigma, sigma / d);
+    gl.uniform1i(bl.u.src, 12);
+    for (const [from, to, dir] of [[0, 1, [1, 0]], [1, 0, [0, 1]]]) {
+      target(to);
+      gl.activeTexture(gl.TEXTURE12);
+      gl.bindTexture(gl.TEXTURE_2D, this.glowTex[from]);
+      gl.uniform2f(bl.u.dir, dir[0], dir[1]);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.activeTexture(gl.TEXTURE12);
+    gl.bindTexture(gl.TEXTURE_2D, this.glowTex[0]);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
   }
 
   // The look's LUT on texture unit 3; false while it is still loading or when
@@ -1067,6 +1257,7 @@ export class Renderer {
     }
     this.w = bitmap.width;
     this.h = bitmap.height;
+    this.imageId++;
   }
 
   // opts.crop / opts.angle override the recipe's geometry (crop mode shows the
@@ -1098,8 +1289,19 @@ export class Renderer {
       this.canvas.width = outW;
       this.canvas.height = outH;
     }
+    // The glow first: its passes draw to their own targets.
+    const Lg = tone && p.look ? { ...DEFAULTS, ...p.look.params } : null;
+    const amtG = Lg ? Math.min(1, Math.max(0, p.lookAmount / 100)) : 0;
+    const halation = tone ? Math.min(1, (p.halation + (Lg ? Lg.halation * amtG : 0)) / 100) : 0;
+    const bloom = tone ? Math.min(1, (p.bloom + (Lg ? Lg.bloom * amtG : 0)) / 100) : 0;
+    const glowSize = p.halation > 0 || p.bloom > 0 || !Lg ? p.halationSize : Lg.halationSize;
+    if (halation > 0 || bloom > 0) this.buildGlow(p.exposure, glowSize);
     gl.viewport(0, 0, outW, outH);
     gl.useProgram(this.prog);
+    gl.uniform1i(this.u.useGlow, halation > 0 || bloom > 0 ? 1 : 0);
+    gl.uniform1i(this.u.glowTex, 12);
+    gl.uniform1f(this.u.halation, halation);
+    gl.uniform1f(this.u.bloom, bloom);
     gl.uniform1i(this.u.img, 0);
     gl.uniform2f(this.u.srcSize, fw, fh);
     gl.uniform1i(this.u.orient, ((opts.tone === false ? 0 : p.orient) / 90) & 3);
@@ -1166,7 +1368,10 @@ export class Renderer {
     // The frame's own grain size wins when it has grain of its own.
     const lookGrain = L ? L.grain * amt : 0;
     gl.uniform1f(this.u.grain, tone ? Math.min(1, (p.grain + lookGrain) / 100) : 0);
-    gl.uniform1f(this.u.grainSize, (p.grain > 0 || !lookGrain ? p.grainSize : L.grainSize) / 100);
+    const ownGrain = p.grain > 0 || !lookGrain;
+    gl.uniform1f(this.u.grainSize, (ownGrain ? p.grainSize : L.grainSize) / 100);
+    gl.uniform1f(this.u.grainRough, (ownGrain ? p.grainRoughness : L.grainRoughness) / 100);
+    gl.uniform1f(this.u.grainColor, (ownGrain ? p.grainColor : L.grainColor) / 100);
     gl.uniform1f(this.u.pxSize, crop.w * viewport.w * fw / outW / Math.max(fw, fh));
     gl.uniform1f(this.u.seed, 0.5);
     gl.uniform1i(this.u.linearSrc, this.linear ? 1 : 0);

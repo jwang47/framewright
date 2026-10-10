@@ -31,7 +31,7 @@ class LutLookupTests(unittest.TestCase):
             look = {'name': 'My look', 'params': {'lut': 'missing.cube'}}
             (root / studio.LOOKS_FILE).write_text(json.dumps({'looks': [look]}))
             with patch.object(studio, 'lut_directories', return_value=[]):
-                self.assertEqual(studio.all_looks(root), [{**look, 'missingLut': 'missing.cube'}])
+                self.assertEqual([l for l in studio.all_looks(root) if not l.get('preset')], [{**look, 'missingLut': 'missing.cube'}])
             self.assertEqual(studio.clean_look(look['params']), look['params'])
             self.assertEqual(studio.read_looks(root), [look])
 

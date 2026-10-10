@@ -29,6 +29,30 @@ class RecipeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             studio.clean_edit({"lens": {"k": [0] * 5, "focal": math.inf}})
 
+    def test_film_grain_and_glow_defaults(self):
+        # Roughness and colour only mean something with grain; the glow's size
+        # only with halation or bloom, and defaults to 30.
+        self.assertEqual(studio.clean_edit({"grainRoughness": 40, "grainColor": 20, "halationSize": 50}),
+                         {"version": 1})
+        self.assertEqual(studio.clean_edit({"grain": 10, "grainRoughness": 40, "halation": 30}),
+                         {"version": 1, "grain": 10, "grainSize": 25, "grainRoughness": 40,
+                          "halation": 30, "halationSize": 30})
+        self.assertEqual(studio.clean_edit({"bloom": 5, "halationSize": 0})["halationSize"], 0)
+        with self.assertRaises(ValueError):
+            recipe_schema.validate_recipe({"halation": 101})
+
+    def test_film_presets_are_valid_looks(self):
+        presets = studio.film_presets()
+        self.assertGreaterEqual(len(presets), 4)
+        for p in presets:
+            with self.subTest(p["name"]):
+                self.assertTrue(p["preset"])
+                self.assertEqual(studio.clean_look(p["params"]), p["params"])
+                recipe_schema.validate_recipe({"look": {"name": p["name"], "params": p["params"]}})
+        with tempfile.TemporaryDirectory() as tmp:
+            names = [l["name"] for l in studio.all_looks(Path(tmp))]
+            self.assertTrue(set(p["name"] for p in presets) <= set(names))
+
     def test_strict_validation_rejects_unknown_nested_fields_and_ranges(self):
         invalid = [
             {"exposur": 1}, {"exposure": 5}, {"exposure": True}, {"version": 2},

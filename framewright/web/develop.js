@@ -42,8 +42,13 @@ const SLIDERS = [
   { g: 'detail', k: 'noise', label: 'Noise', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
   { g: 'detail', k: 'colorNoise', label: 'Colour noise', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
   { g: 'fx', k: 'vignette', label: 'Vignette', min: -100, max: 100, step: 1 },
-  { g: 'fx', k: 'grain', label: 'Grain', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
-  { g: 'fx', k: 'grainSize', label: 'Grain size', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}`, neutral: 25 },
+  { g: 'film', k: 'grain', label: 'Grain', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
+  { g: 'film', k: 'grainSize', label: 'Grain size', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}`, neutral: 25 },
+  { g: 'film', k: 'grainRoughness', label: 'Roughness', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
+  { g: 'film', k: 'grainColor', label: 'Colour grain', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
+  { g: 'film', k: 'halation', label: 'Halation', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
+  { g: 'film', k: 'bloom', label: 'Bloom', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
+  { g: 'film', k: 'halationSize', label: 'Glow size', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}`, neutral: 30 },
 ];
 // Sliders that move pixels around: they refit the crop and show the guide grid.
 const WARPS = ['angle', 'vertical', 'horizontal', 'distortion', 'groundShift', 'skyShift', 'horizon', 'groundFeather'];
@@ -882,7 +887,7 @@ export function createDevelop(app) {
     }
     lookSel.value = !l ? '' : i < 0 ? 'frame' : String(i);
     // A LUT's look comes from its file in luts/ and goes when the file does.
-    $('#lookDelete').disabled = !l || !st.looks.some(s => s.name === l.name && !s.file);
+    $('#lookDelete').disabled = !l || !st.looks.some(s => s.name === l.name && !s.file && !s.preset);
     $('#sliders-look').hidden = !l;
   }
 
@@ -912,7 +917,7 @@ export function createDevelop(app) {
   }
 
   async function deleteLook() {
-    const look = st.looks.find(s => s.name === st.params.look?.name && !s.file);
+    const look = st.looks.find(s => s.name === st.params.look?.name && !s.file && !s.preset);
     if (!look || !confirm(`Delete the look "${look.name}"? Frames already using it keep their copy.`)) return;
     try {
       st.looks = (await app.post('/api/looks/delete', { name: look.name })).looks;
