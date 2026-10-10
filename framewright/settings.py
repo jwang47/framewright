@@ -48,6 +48,14 @@ def load_config() -> dict:
         raise ValueError("settings delete_from_card must be true or false")
     if "port" in config:
         validate_port(config["port"])
+    if "remote" in config and not isinstance(config["remote"], bool):
+        raise ValueError("settings remote must be true or false")
+    if "remotePort" in config:
+        validate_port(config["remotePort"])
+    if "remoteHost" in config and config["remoteHost"] is not None and (not isinstance(config["remoteHost"], str) or not config["remoteHost"].strip()):
+        raise ValueError("settings remoteHost must be an address or null")
+    if "remoteToken" in config and (not isinstance(config["remoteToken"], str) or len(config["remoteToken"]) < 32):
+        raise ValueError("settings remoteToken must be a generated token; delete it to create a new one")
     return config
 
 
@@ -95,15 +103,45 @@ def lut_directories(library: Path) -> list[Path]:
     return list(dict.fromkeys(paths))
 
 
+def save_config(config: dict) -> None:
+    """Replace config.json atomically, readable and writable by the user only.
+
+    The file can hold the remote API token, so it is never left group- or
+    world-readable, including while it is being written.
+    """
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.part")
+    temporary.unlink(missing_ok=True)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(json.dumps(config, indent=2) + "\n")
+    if sys.platform != "win32":
+        os.chmod(temporary, 0o600)
+    temporary.replace(path)
+
+
 def save_library(library: Path) -> None:
     """Persist the first-run choice, preserving other settings."""
     config = load_config()
     config["library"] = str(library.resolve())
-    path = config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".json.part")
-    temporary.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    save_config(config)
+
+
+def remote_token(rotate: bool = False) -> str:
+    """The remote API's bearer token, generated and saved on first use."""
+    import secrets
+    config = load_config()
+    token = config.get("remoteToken")
+    if rotate or not token:
+        token = secrets.token_urlsafe(32)
+        config["remoteToken"] = token
+        save_config(config)
+    elif sys.platform != "win32":
+        path = config_path()
+        if path.stat().st_mode & 0o077:
+            os.chmod(path, 0o600)
+    return token
 
 
 def validate_shoot_pattern(pattern: str) -> str:

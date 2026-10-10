@@ -144,6 +144,11 @@ Three original numeric looks are built in. They use curves, split toning and
 grain; no third-party creative content is included. Your first saved look copies
 the built-ins into the library's own `looks.json`, where you can edit/delete them.
 
+Read-only film presets of our own (`framewright/film-presets.json`) follow the
+saved looks. They combine grain, halation and the film response: a negative and
+print model that rolls highlights off instead of clipping and shifts colour as
+exposure is pushed or pulled. None is derived from a real film stock's data.
+
 Use **Add LUT…** or drop a `.cube` file on the look controls. The browser and
 server validate it, and installation copies it into the user LUT folder outside
 the app. Existing files with different content are not overwritten.
@@ -194,6 +199,42 @@ tweak, or discard the suggestion.
 [recipe.schema.json](framewright/recipe.schema.json) is generated from the
 cleaner contract. It covers adjustment ranges, curves, crop, looks and masks;
 `--check` also performs semantic checks such as unique curve x coordinates.
+
+## Remote API for the phone app
+
+An optional second listener lets the companion iOS app browse and edit the
+library over [Tailscale](https://tailscale.com), and ask Claude Code on this
+machine to suggest an edit. It is off by default:
+
+```sh
+python -m framewright --remote                       # binds this Mac's Tailscale address, port 8766
+python -m framewright remote-token                   # print the token
+python -m framewright remote-token --rotate          # replace it (re-pair devices)
+```
+
+Or set `"remote": true` (optionally `remotePort`, `remoteHost`) in config.json.
+On start it prints the URL (MagicDNS name when available) and token, and a
+`framewright://pair?url=...&token=...` link for the app. Every request needs
+`Authorization: Bearer TOKEN`. Endpoints, all under `/remote/v1`:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/info` | host name, version, library folder name, whether Claude Code is available |
+| GET | `/shoots` | shoots, newest first, with frame/pick/edit counts |
+| GET | `/frames?shoot=S` | frames with raw/JPEG, edited, proposed, picked, available |
+| GET | `/preview?shoot=S&key=K&size=N` | camera-rendered preview JPEG, long side ≤ N |
+| GET | `/source?shoot=S&key=K&kind=jpeg\|raw` | the original file |
+| GET/POST | `/edit` | read a recipe and its revision; save with `base` (409 on conflict) |
+| GET | `/proposal?shoot=S&key=K` | the proposal, or null |
+| POST | `/proposal/accept`, `/proposal/discard` | settle a proposal as the studio does |
+| POST | `/pick` | pick or unpick a frame |
+| GET | `/looks`, `/lut?name=N&hash=H` | looks, presets and LUT files; a LUT's text |
+| POST | `/upload?shoot=S&name=FILE` | add a phone photo to `<library>/S/raw/` (no overwrite) |
+| POST/GET | `/suggest`, `/suggest?job=ID` | run Claude Code to propose an edit; poll its progress |
+
+See [SECURITY.md](SECURITY.md#remote-api-opt-in-tailnet-only) for the binding,
+token and threat model. For local testing only, `--remote-host 127.0.0.1
+--remote-allow-any-host` binds a non-tailnet address.
 
 ## Camera support and previews
 

@@ -37,6 +37,11 @@ for multiple renders use an output directory. Without `-o`, review images go to
 part of the result: disclose them before judging fidelity to an intended look.
 Never claim an image was visually checked if only JSON validation was run.
 
+Suggestions requested from the phone app run this same workflow through
+`claude -p` in a temporary folder (`framewright/remote.py`). The person asked
+for a new suggestion there, so replacing an existing proposal with
+`--replace-proposal` is authorized for that frame; nothing else is.
+
 ## Recipe contract
 
 `framewright/recipe.schema.json` is the generated JSON Schema. Regenerate it with

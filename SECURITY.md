@@ -15,6 +15,53 @@ renderer and reduce cross-site request and DNS-rebinding risks. They are not
 authentication against local processes: command-line clients with a loopback
 Host may omit Origin and still access the library.
 
+## Remote API (opt-in, tailnet only)
+
+`--remote` (or `"remote": true` in config.json) starts a second, separate
+listener for the companion phone app. The studio server above is unchanged:
+still loopback-only, with the same Host/Origin checks. The remote listener is
+off by default and:
+
+- binds only to this machine's Tailscale address, found with `tailscale ip -4`
+  or by scanning interface addresses for 100.64.0.0/10. `--remote-host` (or
+  config `remoteHost`) must also be a 100.64.0.0/10 or fd7a:115c:a1e0::/48
+  address unless `--remote-allow-any-host` is given, which is meant for local
+  testing. It never binds a wildcard address. The default port is 8766
+  (`--remote-port`, config `remotePort`). With no Tailscale address it refuses
+  to start rather than fall back to another interface.
+- requires `Authorization: Bearer TOKEN` on every request. The token is
+  checked with a constant-time comparison before routing or reading a body;
+  anything else gets 401. The token is generated once with
+  `secrets.token_urlsafe(32)` and stored as `remoteToken` in config.json,
+  which is written with mode 0600. `python -m framewright remote-token`
+  prints it and `--rotate` replaces it; restart and pair devices again.
+- serves plain HTTP inside the tailnet. WireGuard encrypts and authenticates
+  the traffic between devices, so no TLS is added.
+- exposes only `/remote/v1`: shoots and frames, previews, original files of
+  listed frames, recipes (revision-checked, through `clean_edit`), proposals
+  (accept/discard), picks, looks and the user's LUT files, uploading a photo
+  into a new or existing dated shoot (never overwriting), and starting a
+  Claude Code suggestion. Shoots and frames are validated against the
+  library's own listing; paths are never accepted. JSON bodies are capped at
+  16 MB and uploads at 200 MB. There is no file management, import, offload,
+  eject, send, export or settings access.
+- runs suggestions as `claude -p` in a fresh temporary folder, with tools
+  limited to `python3 -m framewright render`, Read, and writing files inside
+  that folder. One job runs at a time, five may wait, each is killed after
+  10 minutes. Claude's Read tool can read files the user can read; treat a
+  suggestion request as running Claude Code as yourself.
+
+Threat model: anyone who can reach the address and holds the token can read
+the library's photos, originals and LUTs, change recipes, picks and proposals,
+add photos and spend Claude Code usage. Tailnet peers without the token get
+only 401s. Use Tailscale ACLs to limit which devices can reach port 8766, keep
+the token private (it is printed on start and in the pairing link), and rotate
+it if a device is lost. LUTs sent to your phone stay personal-use content.
+
+To turn it off, stop Framewright and start it without `--remote`, and remove
+`"remote": true` from config.json. Run `python -m framewright remote-token
+--rotate` to invalidate a token that may have leaked.
+
 Do not put private photo paths, recipes, images, or licensed LUTs in public bug
 reports. Reproduce problems with an empty library or synthetic data where possible.
 

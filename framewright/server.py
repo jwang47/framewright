@@ -143,6 +143,10 @@ EDIT_RANGES = {
     "halation": (0.0, 100.0),         # red glow bleeding round bright highlights
     "halationSize": (0.0, 100.0),
     "bloom": (0.0, 100.0),            # the same glow, neutral
+    "filmResponse": (0.0, 100.0),     # film's negative and print in place of the plain tone response
+    "filmContrast": (-100.0, 100.0),  # the print's contrast
+    "filmLatitude": (-100.0, 100.0),  # how softly highlights and shadows roll off
+    "filmCrossover": (-100.0, 100.0), # warm highlights and cool shadows, or the reverse
     "sharpen": (0.0, 100.0),
     "sharpenRadius": (0.0, 3.0),
     "noise": (0.0, 100.0),
@@ -168,7 +172,8 @@ EDIT_RANGES = {
 # recipe's own settings, with lookAmount (0..100, default 100) mixing it in.
 LOOK_FIELDS = ("temp", "tint", "contrast", "highlights", "shadows", "whites", "blacks",
                "vibrance", "saturation", "vignette", "grain", "grainSize", "grainRoughness",
-               "grainColor", "halation", "halationSize", "bloom", "curve",
+               "grainColor", "halation", "halationSize", "bloom", "filmResponse", "filmContrast",
+               "filmLatitude", "filmCrossover", "curve",
                "splitShadowHue", "splitShadowSat", "splitHighlightHue", "splitHighlightSat",
                "splitBalance", "lut", "lutHash")
 
@@ -209,7 +214,8 @@ MASK_RANGES = {
 # one knows the server code changed under it.
 BOOT_ID = uuid.uuid4().hex[:8]
 HERE = Path(__file__).resolve().parent
-SERVER_CODE = (HERE / "server.py", HERE / "lenses.py", HERE / "import_photos.py", HERE / "store.py", HERE / "settings.py")
+SERVER_CODE = (HERE / "server.py", HERE / "lenses.py", HERE / "import_photos.py", HERE / "store.py", HERE / "settings.py",
+               HERE / "remote.py")
 
 
 def mtimes(paths) -> dict[str, float]:
@@ -821,6 +827,10 @@ def clean_edit(params: object) -> dict:
         out.pop("halationSize", None)
     elif "halationSize" not in out:
         out["halationSize"] = 0.0 if params.get("halationSize") == 0 else 30.0
+    # The film response's settings only matter with some of it.
+    if "filmResponse" not in out:
+        for key in ("filmContrast", "filmLatitude", "filmCrossover"):
+            out.pop(key, None)
     # The sharpening radius defaults to 1 and only matters with sharpening.
     if "sharpen" not in out:
         out.pop("sharpenRadius", None)
@@ -872,6 +882,50 @@ def clean_edit(params: object) -> dict:
         if box != {"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0}:
             out["crop"] = box
     return out
+
+
+NO_BASE = object()
+
+
+class EditConflict(Exception):
+    """A save based on an older revision than the recipe file now holds."""
+
+    def __init__(self, rev: str, params: dict | None):
+        super().__init__("changed elsewhere")
+        self.rev = rev
+        self.params = params
+
+
+def save_edit(shoot_dir: Path, key: str, params: object, base: object = NO_BASE) -> tuple[dict | None, str]:
+    """Clean and save a frame's recipe -> (recipe or None, new revision).
+
+    With a base revision, a save made from an older version than the file
+    holds is refused with EditConflict, so two clients (the studio, the
+    remote API, an agent editing the file) never silently overwrite each other.
+    """
+    recipe = clean_edit(params) if params is not None else None
+    with _write_lock:
+        return _save_edit_locked(shoot_dir, key, recipe, base)
+
+
+def _save_edit_locked(shoot_dir: Path, key: str, recipe: dict | None, base: object = NO_BASE) -> tuple[dict | None, str]:
+    """save_edit for a recipe already cleaned, with _write_lock held."""
+    path = edit_path(shoot_dir, key)
+    has_raw = key in raw_sources(shoot_dir)
+    if recipe and recipe.get("source") == "raw" and not has_raw:
+        raise ValueError("this frame has no raw file")
+    current = edit_rev(path)
+    if base is not NO_BASE and base != current:
+        raise EditConflict(current, json.loads(path.read_text()) if path.is_file() else None)
+    # A recipe that changes nothing is no recipe: keep the folder clean.
+    # Naming the source an unedited frame would use anyway changes nothing.
+    if recipe is None or recipe in ({"version": 1},
+                                    {"version": 1, "source": default_source(has_raw)}):
+        path.unlink(missing_ok=True)
+        recipe = None
+    else:
+        atomic_write(path, json.dumps(recipe, indent=2, sort_keys=True) + "\n")
+    return recipe, edit_rev(path)
 
 
 def preview(src: Path, shoot_dir: Path) -> Path:
@@ -1922,30 +1976,13 @@ class Handler(BaseHTTPRequestHandler):
         if not found:
             self.send_json({"error": "no such frame"}, HTTPStatus.NOT_FOUND)
             return
-        path = edit_path(found[0], body["key"])
-        params = body.get("params")
-        recipe = clean_edit(params) if params is not None else None
-        has_raw = body["key"] in raw_sources(found[0])
-        if recipe and recipe.get("source") == "raw" and not has_raw:
-            raise ValueError("this frame has no raw file")
-        with _write_lock:
-            # Refuse a save made from an older version than the file holds:
-            # send the current one back for the page to take up instead.
-            current = edit_rev(path)
-            if "base" in body and body["base"] != current:
-                self.send_json({"error": "changed elsewhere", "rev": current,
-                                "params": json.loads(path.read_text()) if path.is_file() else None},
-                               HTTPStatus.CONFLICT)
-                return
-            # A recipe that changes nothing is no recipe: keep the folder clean.
-            # Naming the source an unedited frame would use anyway changes nothing.
-            if recipe is None or recipe in ({"version": 1},
-                                            {"version": 1, "source": default_source(has_raw)}):
-                path.unlink(missing_ok=True)
-                recipe = None
-            else:
-                atomic_write(path, json.dumps(recipe, indent=2, sort_keys=True) + "\n")
-            rev = edit_rev(path)
+        try:
+            recipe, rev = save_edit(found[0], body["key"], body.get("params"), body.get("base", NO_BASE))
+        except EditConflict as exc:
+            # Send the current version back for the page to take up instead.
+            self.send_json({"error": "changed elsewhere", "rev": exc.rev, "params": exc.params},
+                           HTTPStatus.CONFLICT)
+            return
         self.send_json({"key": body["key"], "params": recipe, "rev": rev})
 
     def api_export(self, shoot: str, key: str, review: bool = False, tag: str = "") -> None:
@@ -2017,6 +2054,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-browser", action="store_true", help="do not open a browser tab")
     parser.add_argument("--no-reload", action="store_true",
                         help="run one server, without restarting it when the code changes")
+    parser.add_argument("--remote", action="store_true",
+                        help="also serve the token-protected remote API on this machine's Tailscale address "
+                             "(config: \"remote\": true); see SECURITY.md")
+    parser.add_argument("--remote-host", help="address for the remote API (must be a Tailscale address)")
+    parser.add_argument("--remote-port", type=int, help="remote API port (config remotePort, otherwise 8766)")
+    parser.add_argument("--remote-allow-any-host", action="store_true",
+                        help="allow --remote-host to be a non-Tailscale address (testing only)")
     raw = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(raw)
     try:
@@ -2025,6 +2069,12 @@ def main(argv: list[str] | None = None) -> int:
         library = resolve_library(args.library)
         if library is not None:
             library.mkdir(parents=True, exist_ok=True)
+        remote = None
+        if args.remote or load_config().get("remote") is True:
+            from .remote import resolve_remote
+            if library is None:
+                raise ValueError("the remote API needs a library; pass --library or choose one first")
+            remote = resolve_remote(args.remote_host, args.remote_port, args.remote_allow_any_host)
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -2037,6 +2087,14 @@ def main(argv: list[str] | None = None) -> int:
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"library: {Handler.root}" if library else "choose a library folder in the browser")
     print(f"serving {url}  (ctrl-c to stop; boot {BOOT_ID})", flush=True)
+    if remote is not None:
+        from . import remote as remote_api
+        try:
+            remote_api.start(library, *remote)
+        except (OSError, ValueError) as exc:
+            print(f"error: remote API not started: {exc}", file=sys.stderr)
+            server.server_close()
+            return 1
     if not args.no_browser:
         webbrowser.open(url)
     try:
