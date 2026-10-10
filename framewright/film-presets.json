@@ -1,37 +1,56 @@
 {
   "looks": [
     {"name": "Film · Portrait 400", "params": {
-      "temp": 8, "contrast": -8, "highlights": -15, "shadows": 10, "vibrance": 6, "saturation": -6,
+      "temp": 8, "contrast": -8, "highlights": -10, "shadows": 10, "vibrance": 6, "saturation": -8,
       "curve": {"rgb": [[0, 6], [25, 26], [75, 76], [100, 97]]},
       "splitHighlightHue": 40, "splitHighlightSat": 10, "splitShadowHue": 200, "splitShadowSat": 6,
       "grain": 22, "grainSize": 30, "grainRoughness": 35, "grainColor": 30,
-      "halation": 15, "halationSize": 30}},
+      "halation": 15, "halationSize": 30,
+      "filmResponse": 70, "filmLatitude": 35, "filmCrossover": 12}},
     {"name": "Film · Tungsten 800", "params": {
-      "temp": -12, "tint": 3, "contrast": 10,
+      "temp": -12, "tint": 3, "contrast": 5,
       "curve": {"rgb": [[0, 4], [25, 22], [75, 80], [100, 99]], "b": [[0, 4], [50, 52], [100, 100]]},
       "splitShadowHue": 190, "splitShadowSat": 10,
       "grain": 38, "grainSize": 40, "grainRoughness": 50, "grainColor": 45,
-      "halation": 70, "halationSize": 45, "bloom": 10}},
+      "halation": 70, "halationSize": 45, "bloom": 10,
+      "filmResponse": 70, "filmContrast": 10, "filmCrossover": -25}},
     {"name": "Film · Slide 100", "params": {
-      "contrast": 25, "blacks": -8, "vibrance": 10, "saturation": 12,
-      "curve": {"rgb": [[0, 0], [25, 20], [75, 82], [100, 100]]},
+      "contrast": 8, "blacks": -4, "vibrance": 10, "saturation": 10,
+      "curve": {"rgb": [[0, 0], [25, 21], [75, 81], [100, 100]]},
       "splitShadowHue": 230, "splitShadowSat": 8,
       "grain": 10, "grainSize": 15, "grainRoughness": 20, "grainColor": 15,
-      "halation": 5, "halationSize": 25}},
+      "halation": 5, "halationSize": 25,
+      "filmResponse": 85, "filmContrast": 20, "filmLatitude": -40, "filmCrossover": -10}},
     {"name": "Film · Mono 400", "params": {
-      "contrast": 18, "saturation": -100,
+      "contrast": 10, "saturation": -100,
       "curve": {"rgb": [[0, 3], [25, 22], [75, 80], [100, 98]]},
-      "grain": 40, "grainSize": 35, "grainRoughness": 60}},
+      "grain": 40, "grainSize": 35, "grainRoughness": 60,
+      "filmResponse": 80, "filmContrast": 15, "filmLatitude": 10}},
     {"name": "Film · Faded 200", "params": {
-      "temp": 6, "contrast": -15, "saturation": -18,
+      "temp": 6, "contrast": -10, "saturation": -15,
       "curve": {"rgb": [[0, 12], [30, 30], [70, 70], [100, 92]]},
       "splitHighlightHue": 45, "splitHighlightSat": 12,
       "grain": 25, "grainSize": 28, "grainRoughness": 40, "grainColor": 35,
-      "halation": 10, "halationSize": 30}},
+      "halation": 10, "halationSize": 30,
+      "filmResponse": 70, "filmContrast": -25, "filmLatitude": 50, "filmCrossover": 15}},
     {"name": "Film · Push 1600", "params": {
-      "contrast": 30, "shadows": -10, "saturation": -10,
-      "curve": {"rgb": [[0, 0], [20, 14], [80, 86], [100, 100]]},
+      "contrast": 15, "shadows": -10, "saturation": -10,
+      "curve": {"rgb": [[0, 0], [20, 15], [80, 85], [100, 100]]},
       "grain": 60, "grainSize": 55, "grainRoughness": 70, "grainColor": 50,
-      "halation": 25, "halationSize": 35}}
+      "halation": 25, "halationSize": 35,
+      "filmResponse": 85, "filmContrast": 30, "filmLatitude": -25, "filmCrossover": 10}},
+    {"name": "Film · Cross 200", "params": {
+      "contrast": 5, "vibrance": 12, "saturation": 5,
+      "curve": {"rgb": [[0, 2], [25, 22], [75, 80], [100, 99]], "g": [[0, 0], [50, 52], [100, 100]]},
+      "grain": 28, "grainSize": 30, "grainRoughness": 40, "grainColor": 35,
+      "halation": 20, "halationSize": 30,
+      "filmResponse": 100, "filmContrast": 35, "filmLatitude": -20, "filmCrossover": 75}},
+    {"name": "Film · Overexposed 400", "params": {
+      "temp": 5, "contrast": -12, "shadows": 25, "blacks": 10, "saturation": -12,
+      "curve": {"rgb": [[0, 8], [25, 32], [75, 82], [100, 98]]},
+      "splitHighlightHue": 50, "splitHighlightSat": 8,
+      "grain": 20, "grainSize": 28, "grainRoughness": 30, "grainColor": 25,
+      "halation": 15, "halationSize": 35, "bloom": 8,
+      "filmResponse": 100, "filmContrast": -20, "filmLatitude": 60, "filmCrossover": 10}}
   ]
 }

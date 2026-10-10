@@ -94,6 +94,26 @@
       "minimum": 0.0,
       "maximum": 100.0
     },
+    "filmResponse": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 100.0
+    },
+    "filmContrast": {
+      "type": "number",
+      "minimum": -100.0,
+      "maximum": 100.0
+    },
+    "filmLatitude": {
+      "type": "number",
+      "minimum": -100.0,
+      "maximum": 100.0
+    },
+    "filmCrossover": {
+      "type": "number",
+      "minimum": -100.0,
+      "maximum": 100.0
+    },
     "sharpen": {
       "type": "number",
       "minimum": 0.0,
@@ -902,6 +922,26 @@
                 "bloom": {
                   "type": "number",
                   "minimum": 0.0,
+                  "maximum": 100.0
+                },
+                "filmResponse": {
+                  "type": "number",
+                  "minimum": 0.0,
+                  "maximum": 100.0
+                },
+                "filmContrast": {
+                  "type": "number",
+                  "minimum": -100.0,
+                  "maximum": 100.0
+                },
+                "filmLatitude": {
+                  "type": "number",
+                  "minimum": -100.0,
+                  "maximum": 100.0
+                },
+                "filmCrossover": {
+                  "type": "number",
+                  "minimum": -100.0,
                   "maximum": 100.0
                 },
                 "splitShadowHue": {
