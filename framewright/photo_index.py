@@ -4,7 +4,8 @@ Directory listings and manifest signatures detect imports, removals, renames
 and offloads on the next lookup. A directory's own timestamp is not enough:
 NTFS (and other filesystems with coarse clock ticks) can leave it unchanged when
 an entry is added or renamed moments after the previous lookup. A periodic
-refresh also notices files modified in place, which do not change the listing. Recipes and picks are not cached here.
+refresh also notices files modified in place, which do not change the listing.
+Recipes and picks are not cached here.
 """
 from dataclasses import dataclass
 import os
