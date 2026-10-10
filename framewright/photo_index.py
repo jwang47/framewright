@@ -1,10 +1,13 @@
 """In-memory source index; no database or photo-library writes.
 
-Directory and manifest signatures detect imports, removals and offloads on the
-next lookup. A periodic refresh also notices files modified in place, which do
+Directory listings and manifest signatures detect imports, removals, renames
+and offloads on the next lookup. A directory's own timestamp is not enough:
+NTFS (and other filesystems with coarse clock ticks) can leave it unchanged when
+an entry is added or renamed moments after the previous lookup. A periodic refresh also notices files modified in place, which do
 not change their directory's timestamp. Recipes and picks are not cached here.
 """
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from threading import RLock
 from time import monotonic
@@ -27,6 +30,14 @@ def stamp(path: Path):
         return None
 
 
+def listing(path: Path):
+    """The directory's entry names: cheap next to a scan, which stats every file."""
+    try:
+        return tuple(sorted(os.listdir(path)))
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+
+
 class PhotoIndex:
     def __init__(self, scan, frame_key, raw_exts, jpeg_exts, refresh_seconds=30):
         self.scan = scan
@@ -40,7 +51,8 @@ class PhotoIndex:
     def get(self, shoot: Path, store_key=None) -> PhotoSnapshot:
         shoot = shoot.resolve()
         with self.lock:
-            signature = (stamp(shoot / 'raw'), stamp(shoot / 'store.json'), store_key)
+            raw = shoot / 'raw'
+            signature = (stamp(raw), listing(raw), stamp(shoot / 'store.json'), store_key)
             now = monotonic()
             cached = self.entries.get(shoot)
             if cached and cached[0] == signature and now - cached[1] < self.refresh_seconds:
