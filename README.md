@@ -144,6 +144,11 @@ Three original numeric looks are built in. They use curves, split toning and
 grain; no third-party creative content is included. Your first saved look copies
 the built-ins into the library's own `looks.json`, where you can edit/delete them.
 
+Read-only film presets of our own (`framewright/film-presets.json`) follow the
+saved looks. They combine grain, halation and the film response: a negative and
+print model that rolls highlights off instead of clipping and shifts colour as
+exposure is pushed or pulled. None is derived from a real film stock's data.
+
 Use **Add LUT…** or drop a `.cube` file on the look controls. The browser and
 server validate it, and installation copies it into the user LUT folder outside
 the app. Existing files with different content are not overwritten.

@@ -143,6 +143,10 @@ EDIT_RANGES = {
     "halation": (0.0, 100.0),         # red glow bleeding round bright highlights
     "halationSize": (0.0, 100.0),
     "bloom": (0.0, 100.0),            # the same glow, neutral
+    "filmResponse": (0.0, 100.0),     # film's negative and print in place of the plain tone response
+    "filmContrast": (-100.0, 100.0),  # the print's contrast
+    "filmLatitude": (-100.0, 100.0),  # how softly highlights and shadows roll off
+    "filmCrossover": (-100.0, 100.0), # warm highlights and cool shadows, or the reverse
     "sharpen": (0.0, 100.0),
     "sharpenRadius": (0.0, 3.0),
     "noise": (0.0, 100.0),
@@ -168,7 +172,8 @@ EDIT_RANGES = {
 # recipe's own settings, with lookAmount (0..100, default 100) mixing it in.
 LOOK_FIELDS = ("temp", "tint", "contrast", "highlights", "shadows", "whites", "blacks",
                "vibrance", "saturation", "vignette", "grain", "grainSize", "grainRoughness",
-               "grainColor", "halation", "halationSize", "bloom", "curve",
+               "grainColor", "halation", "halationSize", "bloom", "filmResponse", "filmContrast",
+               "filmLatitude", "filmCrossover", "curve",
                "splitShadowHue", "splitShadowSat", "splitHighlightHue", "splitHighlightSat",
                "splitBalance", "lut", "lutHash")
 
@@ -821,6 +826,10 @@ def clean_edit(params: object) -> dict:
         out.pop("halationSize", None)
     elif "halationSize" not in out:
         out["halationSize"] = 0.0 if params.get("halationSize") == 0 else 30.0
+    # The film response's settings only matter with some of it.
+    if "filmResponse" not in out:
+        for key in ("filmContrast", "filmLatitude", "filmCrossover"):
+            out.pop(key, None)
     # The sharpening radius defaults to 1 and only matters with sharpening.
     if "sharpen" not in out:
         out.pop("sharpenRadius", None)
