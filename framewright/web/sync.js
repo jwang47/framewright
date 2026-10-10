@@ -18,6 +18,7 @@ export const SYNC_GROUPS = [
     keys: ['splitShadowHue', 'splitShadowSat', 'splitHighlightHue', 'splitHighlightSat', 'splitBalance'], on: true },
   { id: 'effects', label: 'Vignette, grain and halation',
     keys: ['vignette', 'grain', 'grainSize', 'grainRoughness', 'grainColor', 'halation', 'halationSize', 'bloom'], on: true },
+  { id: 'film', label: 'Film response', keys: ['filmResponse', 'filmContrast', 'filmLatitude', 'filmCrossover'], on: true },
   { id: 'detail', label: 'Sharpening and noise', keys: ['sharpen', 'sharpenRadius', 'noise', 'colorNoise'], on: false },
   { id: 'lens', label: 'Lens correction', keys: ['lens', 'distortion'], on: false },
 ];
