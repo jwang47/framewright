@@ -287,7 +287,7 @@ class EndpointTests(RemoteTestCase):
         luts = self.base / "luts"
         luts.mkdir()
         text = "TITLE \"synthetic\"\n" + "LUT_3D" + "_SIZE 2\n" + "".join(f"{r} {g} {b}\n" for b in (0, 1) for g in (0, 1) for r in (0, 1))
-        (luts / "Synthetic.cube").write_text(text)
+        (luts / "Synthetic.cube").write_bytes(text.encode())   # exact bytes on every platform
         status, body = self.get_json("/looks")
         self.assertEqual(status, 200)
         files = [lk for lk in body["looks"] if lk.get("file")]
