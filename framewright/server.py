@@ -564,6 +564,13 @@ def find_collection(collections: list[dict], slug: str) -> dict | None:
     return next((c for c in collections if slugify(c["name"]) == slug), None)
 
 
+def collection_date(c: dict) -> str:
+    """The latest day a collection covers: its range's end, else its newest item's day."""
+    if c.get("days"):
+        return c["days"]["to"]
+    return max((shoot_date(ref.partition("/")[0]) for ref in c.get("items", [])), default="")
+
+
 def collection_shoots(root: Path, c: dict) -> list[str]:
     """Shoots inside the collection's date range, oldest first."""
     days = c.get("days")
@@ -1242,11 +1249,12 @@ class Handler(BaseHTTPRequestHandler):
                 "clipCounts": {shoot: n for shoot in shoots if (n := len(clips.clip_files(self.root / shoot)))},
                 "store": drive_name() if configured_store() else None,
                 "storeMounted": store_mounted(),
-                "collections": [
+                "collections": sorted((
                     {"name": c["name"], "slug": slugify(c["name"]), "days": c.get("days"),
+                     "date": collection_date(c),
                      "shoots": collection_shoots(self.root, c), "items": len(c.get("items", []))}
                     for c in collections
-                ],
+                ), key=lambda c: (c["date"], c["name"].lower()), reverse=True),
             })
             return
 

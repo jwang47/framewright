@@ -148,5 +148,14 @@ class ClipTests(unittest.TestCase):
         status, _, body = request("GET", "/api/collection?slug=reel")
         self.assertEqual(json.loads(body)["items"], [])
 
+    def test_collections_newest_first(self):
+        from framewright import server
+        trips = [{"name": "Old trip", "days": {"from": "2025-01-01", "to": "2025-01-05"}, "items": []},
+                 {"name": "Portfolio", "items": ["2026-03-15_acme/A", "2024-02-01_acme/B"]},
+                 {"name": "Empty", "items": []},
+                 {"name": "New trip", "days": {"from": "2026-09-01", "to": "2026-09-20"}, "items": []}]
+        dates = sorted(((server.collection_date(c), c["name"]) for c in trips), reverse=True)
+        self.assertEqual([n for _, n in dates], ["New trip", "Portfolio", "Old trip", "Empty"])
+
 if __name__ == "__main__":
     unittest.main()
