@@ -1824,7 +1824,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         try:
-            self.wfile.write(f"retry: 500\nevent: hello\ndata: {BOOT_ID}\n\n".encode())
+            # The boot id and a fingerprint of the page code: a page that
+            # reconnects after missing a change still sees it and reloads.
+            page_rev = hashlib.sha1(json.dumps(sorted(mtimes(STATIC.iterdir()).items())).encode()).hexdigest()[:12]
+            self.wfile.write(f"retry: 500\nevent: hello\ndata: {BOOT_ID} {page_rev}\n\n".encode())
             self.wfile.flush()
             seen = mtimes(STATIC.iterdir())
             quiet = 0.0

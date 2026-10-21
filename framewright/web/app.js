@@ -2305,12 +2305,16 @@ async function start() {
   const reload = async () => {
     if (reloading) return;
     reloading = true;
-    try { await Promise.all([develop.flush(), post.flush()]); } catch { /* reload anyway */ }
+    // Save what's pending first, but never wait on it for long.
+    const wait = new Promise(r => setTimeout(r, 2000));
+    try { await Promise.race([Promise.all([develop.flush(), post.flush()]), wait]); } catch { /* reload anyway */ }
     location.reload();
   };
   function connect() {
     es?.close();
     es = new EventSource('/api/events' + (watch ? `?${watch}` : ''));
+    // hello carries "<boot id> <page code fingerprint>": either changing
+    // means new code, even if the change came while disconnected.
     es.addEventListener('hello', e => {
       if (boot && e.data !== boot) reload();
       boot = e.data;
