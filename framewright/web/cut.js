@@ -253,11 +253,14 @@ export function createCut(app, videos) {
     videos.openClip(m);
     const el = videos.active();
     const go = () => {
-      el.currentTime = c.in + hit.offset * speedOf(c);
       setRate(el, c);
       el.volume = db(cut.clipGain);
-      if (play) el.play().catch(() => {});
-      primeNext();
+      const target = c.in + hit.offset * speedOf(c);
+      // Start playing only once the jump has landed, so the first frames
+      // aren't whatever was on screen before.
+      const begin = () => { if (play && playing) el.play().catch(() => {}); primeNext(); };
+      if (Math.abs(el.currentTime - target) < 0.01 && !el.seeking) begin();
+      else { el.addEventListener('seeked', begin, { once: true }); el.currentTime = target; }
     };
     if (el.readyState >= 1 && videos.holds(el, c)) go();
     else el.addEventListener('loadedmetadata', go, { once: true });
@@ -372,6 +375,10 @@ export function createCut(app, videos) {
     $('#cutLog').setAttribute('aria-pressed', !!cut?.log709);
     for (const b of ['#cutLog', '#cutExport', '#cutTitleBtn', '#cutMusicBtn', '#cutRename']) $(b).disabled = !cut;
     const scale = pps(), s = starts(), width = Math.max(total(), 10) * scale + 40;
+    // While a start is being trimmed, that clip's left edge moves and
+    // everything after it holds still.
+    const shift = trimming?.side === 'l' ? trimming.origLen - len(clips()[trimming.i]) : 0;
+    if (shift) for (let j = trimming.i; j < s.length; j++) s[j] += shift;
     $('#cutLanes').style.width = `${width}px`;
     const step = [1, 2, 5, 10, 15, 30, 60, 120, 300].find(x => x * scale >= 70) || 600;
     let ticks = '';
@@ -445,20 +452,33 @@ export function createCut(app, videos) {
     paintSpeed();
   }
 
+  // Trimming: the dragged edge follows the cursor and the viewer shows the
+  // frame at that edge. Trimming a start keeps the clips after it in place
+  // until you let go; then the gap closes.
+  let trimming = null;
   function trimDrag(e, i, side, scale) {
     e.preventDefault();
     e.stopPropagation();
+    if (playing) stop();
     const c = cut.clips[i], m = info(c), max = m?.duration ?? c.out + 600, x0 = e.clientX;
-    const before = snapshot(), orig = { ...c }, sp = speedOf(c);
+    const before = snapshot(), orig = { ...c }, sp = speedOf(c), origLen = len(c);
+    sel = { kind: 'clip', i };
+    trimming = { i, side, origLen };
+    videos.scrubStart();
     const move = ev => {
       const dt = (ev.clientX - x0) / scale * sp;
       if (side === 'l') c.in = +Math.max(0, Math.min(orig.out - 0.1, orig.in + dt)).toFixed(3);
       else c.out = +Math.min(max, Math.max(orig.in + 0.1, orig.out + dt)).toFixed(3);
       paint();
+      const s = starts();
+      scrub(side === 'l' ? s[i] : s[i] + len(c) - 1 / fpsOut());
     };
     const up = () => {
       removeEventListener('mousemove', move);
       removeEventListener('mouseup', up);
+      trimming = null;
+      videos.scrubEnd();
+      paint();
       if (snapshot() !== before) { history.push(before); future = []; save(); }
     };
     addEventListener('mousemove', move);

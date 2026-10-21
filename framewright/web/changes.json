@@ -1,4 +1,6 @@
 [
+  {"id": 22, "text": "Trim starts by dragging the edge"},
+  {"id": 21, "text": "Smoother play start in Cut"},
   {"id": 20, "text": "Lens profile on by default"},
   {"id": 19, "text": "Lens profiles match more lenses"},
   {"id": 18, "text": "Collapsible sidebar"},

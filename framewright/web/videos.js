@@ -195,10 +195,12 @@ export function createVideos(app) {
   }
 
   function open(c) {
+    const same = current && id(current) === id(c) && video.src.endsWith(clipUrl(c));
     current = c;
     loaded = id(c);
     video.pause();
     if (!c.online) { unload(); loaded = id(c); canvas.hidden = true; return; }
+    if (same) { paintControls(); return; }     // already loaded: no reload, no flash
     video.src = clipUrl(c);
     video.poster = `/clipposter/${encodeURIComponent(c.shoot)}/${c.key}.jpg`;
     useGL(c);
