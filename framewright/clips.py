@@ -30,6 +30,7 @@ from .store import stored
 
 CLIP_DIR = "clips"          # under the shoot's preview folder
 POSTER_PX = 480
+PROXY_H = 540               # preview copies: small, a keyframe every few frames
 CHUNK = 1024 * 1024
 
 _locks: dict[Path, threading.Lock] = {}
@@ -163,6 +164,7 @@ def list_clips(shoot_dir: Path, picks: set[str], rejects: frozenset[str] | set[s
         out.append({"shoot": shoot_dir.name, "key": key, "name": path.name,
                     "at": when.isoformat(timespec="seconds"), "time": when.strftime("%H:%M:%S"),
                     "picked": key in picks, "rejected": key in rejects,
+                    "proxy": proxy_path(shoot_dir, key).is_file(),
                     "online": path.is_file(), "log": is_log(meta),
                     "where": "local" if path.parent.parent == shoot_dir else "store",
                     **{k: v for k, v in meta.items() if k != "created"}})
@@ -230,6 +232,94 @@ def poster(shoot_dir: Path, key: str) -> Path | None:
             return None
         tmp.replace(out)
         return out
+
+
+# --- proxies ----------------------------------------------------------------------
+#
+# Scrubbing 4K long-GOP HEVC means decoding from a keyframe up to a second
+# back on every jump. A proxy is a 540p H.264 copy with a keyframe every 15
+# frames, made once in the background; previews play it and exports still
+# read the original. On a Mac it's decoded, scaled and encoded on the GPU.
+
+
+def proxy_path(shoot_dir: Path, key: str) -> Path:
+    return shoot_dir / ".preview" / CLIP_DIR / f"{key}.proxy.mp4"
+
+
+def _proxy_commands(src: Path, out: Path, meta: dict) -> list[list[str]]:
+    size = meta.get("size", "")
+    match = re.match(r"(\d+)\D(\d+)", size)
+    width = round(PROXY_H * int(match.group(1)) / int(match.group(2)) / 2) * 2 if match else 960
+    tail = ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out)]
+    software = ["ffmpeg", "-v", "error", "-y", "-i", str(src), "-vf", f"scale=-2:{PROXY_H}",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-g", "15", "-pix_fmt", "yuv420p", *tail]
+    if sys.platform != "darwin":
+        return [software]
+    gpu = ["ffmpeg", "-v", "error", "-y", "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld",
+           "-i", str(src), "-vf", f"scale_vt=w={width}:h={PROXY_H}", "-c:v", "h264_videotoolbox", "-b:v", "4M",
+           "-g", "15", *tail]
+    return [gpu, software]
+
+
+def make_proxy(shoot_dir: Path, key: str) -> Path | None:
+    """The clip's proxy, made if missing; None when it can't be made now."""
+    out = proxy_path(shoot_dir, key)
+    if out.is_file():
+        return out
+    path = clip_files(shoot_dir).get(key)
+    if path is None or not path.is_file() or not shutil.which("ffmpeg"):
+        return None
+    with _lock(out):
+        if out.is_file():
+            return out
+        out.parent.mkdir(parents=True, exist_ok=True)
+        part = out.with_name(out.stem + ".part.mp4")
+        for cmd in _proxy_commands(path, part, clip_meta(shoot_dir, key, path)):
+            try:
+                if subprocess.run(cmd, capture_output=True, timeout=1800).returncode == 0:
+                    part.replace(out)
+                    return out
+            except (OSError, subprocess.SubprocessError):
+                pass
+        part.unlink(missing_ok=True)
+        return None
+
+
+class ProxyQueue:
+    """One background worker making proxies; asking for a clip moves it to the front."""
+
+    def __init__(self) -> None:
+        self.jobs: list[tuple[Path, str]] = []
+        self.cond = threading.Condition()
+        self.worker: threading.Thread | None = None
+
+    def add(self, shoot_dir: Path, keys, front: bool = False) -> None:
+        with self.cond:
+            for key in keys:
+                job = (shoot_dir, key)
+                if proxy_path(shoot_dir, key).is_file():
+                    continue
+                if job in self.jobs:
+                    self.jobs.remove(job)
+                if front:
+                    self.jobs.insert(0, job)
+                else:
+                    self.jobs.append(job)
+            if self.worker is None or not self.worker.is_alive():
+                self.worker = threading.Thread(target=self.run, daemon=True)
+                self.worker.start()
+            self.cond.notify()
+
+    def run(self) -> None:
+        while True:
+            with self.cond:
+                if not self.jobs:
+                    return
+                shoot_dir, key = self.jobs.pop(0)
+            make_proxy(shoot_dir, key)
+
+
+proxies = ProxyQueue()
 
 
 def warm_posters(shoot_dir: Path) -> None:

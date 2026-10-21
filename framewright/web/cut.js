@@ -183,6 +183,38 @@ export function createCut(app, videos) {
     app.status(t ? `${t.type === 'dip' ? 'dip to black' : 'crossfade'}, ${t.dur}s` : 'cut');
   }
 
+  // Speed of one clip: a preset, the 120p → 24p conform, or a typed percent.
+  function setSpeed(i, value) {
+    const c = cut?.clips[i];
+    if (!c) return app.status('select a clip on the timeline', 2500);
+    let speed;
+    if (value === 'slow') {
+      const m = info(c), fps = m?.captureFps || m?.fps || 0;
+      if (!(fps > fpsOut() * 1.5)) return app.status(`${c.key} isn't high frame rate; pick a percent instead`, 3000);
+      speed = +(fpsOut() / fps).toFixed(4);
+    } else if (value === 'custom') {
+      const typed = prompt('Speed in percent (5–400):', Math.round(speedOf(c) * 100));
+      if (typed === null) return paintSpeed();
+      speed = +typed / 100;
+      if (!(speed >= 0.05 && speed <= 4)) { paintSpeed(); return app.status('speed runs from 5% to 400%', 3000); }
+    } else speed = +value;
+    change(k => { if (speed === 1) delete k.clips[i].speed; else k.clips[i].speed = speed; });
+    app.status(speed === 1 ? 'normal speed' : `${Math.round(speed * 100)}% speed${speed !== 1 ? ' (silent)' : ''}`);
+  }
+
+  function paintSpeed() {
+    const c = sel.kind === 'clip' ? cut?.clips[sel.i] : null, menu = $('#cutSpeed');
+    menu.disabled = !c;
+    if (!c) { menu.value = '1'; return; }
+    const s = speedOf(c), preset = [...menu.options].find(o => +o.value === s);
+    let custom = menu.querySelector('option[data-current]');
+    if (preset) { custom?.remove(); menu.value = preset.value; return; }
+    if (!custom) { custom = document.createElement('option'); custom.dataset.current = '1'; menu.insertBefore(custom, menu.lastElementChild); }
+    custom.value = String(s);
+    custom.textContent = `${Math.round(s * 1000) / 10}%`;
+    menu.value = custom.value;
+  }
+
   // A 120p clip plays as slow motion in a 24p cut: speed = cut fps / clip fps.
   function toggleSlow(i) {
     const c = cut?.clips[i];
@@ -227,7 +259,7 @@ export function createCut(app, videos) {
       if (play) el.play().catch(() => {});
       primeNext();
     };
-    if (el.readyState >= 1 && el.src.endsWith(`/${c.key}`)) go();
+    if (el.readyState >= 1 && videos.holds(el, c)) go();
     else el.addEventListener('loadedmetadata', go, { once: true });
     if (play) startMusic();
     paintHead();
@@ -354,7 +386,7 @@ export function createCut(app, videos) {
       Object.assign(b.style, { left: `${s[i] * scale}px`, width: `${Math.max(6, len(c) * scale - 2)}px`,
         backgroundImage: `url("/clipposter/${encodeURIComponent(c.shoot)}/${c.key}.jpg")` });
       b.draggable = true;
-      b.innerHTML = `<span class="nm">${c.key}${c.speed ? ` · ×${(1 / c.speed).toFixed(1)} slow` : ''}</span>
+      b.innerHTML = `<span class="nm">${c.key}${c.speed ? ` · ${Math.round(c.speed * 1000) / 10}%` : ''}</span>
         <span class="du">${len(c).toFixed(1)}s</span><i class="trim l"></i><i class="trim r"></i>`;
       b.addEventListener('click', e => {
         if (e.target.classList.contains('trim')) return;
@@ -410,6 +442,7 @@ export function createCut(app, videos) {
     if (m) $('#cutMusicLane .cut-mblock').textContent = `♪ ${m.file} · ${m.gain} dB`;
     paintHead();
     paintMode();
+    paintSpeed();
   }
 
   function trimDrag(e, i, side, scale) {
@@ -579,12 +612,30 @@ export function createCut(app, videos) {
   $('#cutPlay').addEventListener('click', e => { e.currentTarget.blur(); playing ? stop() : play(); });
   $('#cutZoomIn').addEventListener('click', e => { e.currentTarget.blur(); zoom = Math.min(16, zoom * 1.5); paint(); });
   $('#cutZoomOut').addEventListener('click', e => { e.currentTarget.blur(); zoom = Math.max(1, zoom / 1.5); paint(); });
-  $('#cutTrackArea').addEventListener('click', e => {
-    if (e.target.closest('.cut-clip, .cut-tblock, .cut-join, .cut-mblock') || !clips().length) return;
+  // Drag along the ruler or an empty part of the timeline to scrub.
+  function scrub(t) {
+    playhead = Math.max(0, Math.min(total(), t));
+    const hit = locate(playhead), c = clips()[hit.i], el = videos.active();
+    if (mode === 'program' && hit.i === at && videos.holds(el, c) && el.readyState >= 1) {
+      videos.scrubTo(el, c.in + hit.offset * speedOf(c), true);
+      paintHead();
+      paintTitle();
+    } else seek(playhead);
+  }
+  $('#cutTrackArea').addEventListener('mousedown', e => {
+    if (e.target.closest('.cut-clip, .cut-tblock, .cut-join, .cut-mblock') || !clips().length || e.button) return;
+    e.preventDefault();
+    if (playing) stop();
     sel = { kind: null, i: -1 };
-    seek((e.clientX - $('#cutLanes').getBoundingClientRect().left) / pps());
+    const left = $('#cutLanes').getBoundingClientRect().left;
+    scrub((e.clientX - left) / pps());
     paint();
+    const move = ev => scrub((ev.clientX - left) / pps());
+    const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); seek(playhead); };
+    addEventListener('mousemove', move);
+    addEventListener('mouseup', up);
   });
+  $('#cutSpeed').addEventListener('change', e => { e.target.blur(); if (sel.kind === 'clip') setSpeed(sel.i, e.target.value); });
   new ResizeObserver(() => paint()).observe(track);
   videos.onFocus(() => {
     if (mode === 'program') { stop(); videos.program(false); }

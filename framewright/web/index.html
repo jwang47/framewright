@@ -260,6 +260,7 @@
           <option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option>
         </select>
         <button id="vidMute" aria-label="Mute">🔊</button>
+        <button id="vidFull" aria-pressed="false" title="Play the original instead of the quick 540p preview copy">Full</button>
         <button id="vidFs" aria-label="Fullscreen" title="Fullscreen">⤢</button>
       </div>
       <div class="loupe-bar">
@@ -282,6 +283,12 @@
       <span class="hint mono" id="cutTime">0:00 / 0:00</span>
       <span class="hint" id="cutMarks"></span>
       <span class="push-right"></span>
+      <label class="cut-speed" title="Speed of the selected clip (M toggles slow motion)">Speed
+        <select id="cutSpeed" disabled>
+          <option value="1">100%</option><option value="0.5">50%</option><option value="0.4">40%</option>
+          <option value="0.25">25%</option><option value="slow">120p → 24p</option><option value="0.1">10%</option>
+          <option value="2">200%</option><option value="4">400%</option><option value="custom">Custom…</option>
+        </select></label>
       <button id="cutZoomOut" aria-label="Zoom out the timeline">−</button>
       <button id="cutZoomIn" aria-label="Zoom in the timeline">+</button>
       <audio id="cutMusic" preload="auto"></audio>

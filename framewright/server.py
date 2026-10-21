@@ -1416,6 +1416,7 @@ class Handler(BaseHTTPRequestHandler):
                         for shoot in shoots:
                             warm_previews(root, shoot)
                             clips.warm_posters(root / shoot)
+                            clips.proxies.add(root / shoot, clips.clip_files(root / shoot))
                     threading.Thread(target=warm_all, daemon=True).start()
             else:
                 self.api_frames(query.get("shoot", [""])[0])
@@ -1591,7 +1592,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 3 and parts[0] in ("clip", "clipposter"):
-            self.send_clip(parts[0], parts[1], parts[2].removesuffix(".jpg"))
+            self.send_clip(parts[0], parts[1], parts[2].removesuffix(".jpg"), query.get("proxy", [""])[0] == "1")
             return
 
         self.send_error(HTTPStatus.NOT_FOUND)
@@ -1656,7 +1657,7 @@ class Handler(BaseHTTPRequestHandler):
                     threading.Thread(target=clips.warm_posters, args=(d,), daemon=True).start()
         self.send_json({"days": out})
 
-    def send_clip(self, kind: str, shoot: str, key: str) -> None:
+    def send_clip(self, kind: str, shoot: str, key: str, proxy: bool = False) -> None:
         found = self.clip(shoot, key)
         if not found:
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -1676,6 +1677,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_bytes(out.read_bytes(), "image/jpeg", "max-age=3600")
             return
+        if proxy:
+            small = clips.proxy_path(d, key)
+            if small.is_file():
+                self.send_file(small, "video/mp4")
+                return
+            clips.proxies.add(d, [key], front=True)    # not made yet: play the original meanwhile
         if not path.is_file():
             self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, offline(path))
             return

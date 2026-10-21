@@ -58,6 +58,9 @@ export function createVideos(app) {
   let video = players[0];
   let days = [], clips = [], focus = null, loaded = null, gl = null, tex = null, texB = null, u = {};
   let forceGL = false, mixState = null, primed = null;
+  // Preview plays a clip's 540p proxy (quick to scrub) unless Full is on.
+  let full = stored('studio.fullVideo', '0') === '1';
+  const clipUrl = c => `/clip/${encodeURIComponent(c.shoot)}/${c.key}${full ? '' : '?proxy=1'}`;
   let scope = stored('studio.videoScope', 'day'), logView = stored('studio.logView', '1') === '1';
   let token = 0, current = null, focusHook = null;
   // The player can be lent to the Library's preview pane; this is where it lives.
@@ -194,7 +197,7 @@ export function createVideos(app) {
     loaded = id(c);
     video.pause();
     if (!c.online) { unload(); loaded = id(c); canvas.hidden = true; return; }
-    video.src = `/clip/${encodeURIComponent(c.shoot)}/${c.key}`;
+    video.src = clipUrl(c);
     video.poster = `/clipposter/${encodeURIComponent(c.shoot)}/${c.key}.jpg`;
     useGL(c);
     paintControls();
@@ -298,6 +301,19 @@ export function createVideos(app) {
     else video.pause();
   }
 
+  // Seek without queueing: while a seek is in flight, remember only the
+  // latest target and go there when it lands. fastSeek (keyframe) while
+  // dragging where the browser has it, an exact seek when the drag ends.
+  const pending = new WeakMap();
+  function scrubTo(el, t, dragging = false) {
+    if (el.seeking) { pending.set(el, [t, dragging]); return; }
+    if (dragging && el.fastSeek) el.fastSeek(t); else el.currentTime = t;
+  }
+  for (const pl of players) pl.addEventListener('seeked', () => {
+    const next = pending.get(pl);
+    if (next) { pending.delete(pl); scrubTo(pl, ...next); }
+  });
+
   function step(frames) {
     const c = current;
     video.pause();
@@ -329,8 +345,16 @@ export function createVideos(app) {
   });
   new ResizeObserver(draw).observe($('#vidStage'));
   $('#vidPlay').addEventListener('click', e => { e.currentTarget.blur(); toggle(); });
-  $('#vidSeek').addEventListener('input', e => { seeking = true; video.currentTime = +e.target.value; });
-  $('#vidSeek').addEventListener('change', e => { seeking = false; e.target.blur(); });
+  $('#vidSeek').addEventListener('input', e => { seeking = true; scrubTo(video, +e.target.value, true); });
+  $('#vidSeek').addEventListener('change', e => { seeking = false; scrubTo(video, +e.target.value); e.target.blur(); });
+  $('#vidFull').setAttribute('aria-pressed', full);
+  $('#vidFull').addEventListener('click', e => {
+    e.currentTarget.blur();
+    full = !full;
+    store('studio.fullVideo', full ? '1' : '0');
+    $('#vidFull').setAttribute('aria-pressed', full);
+    if (current) { const t = video.currentTime; open(current); video.addEventListener('loadedmetadata', () => { video.currentTime = t; }, { once: true }); }
+  });
   $('#vidRate').addEventListener('change', e => { video.playbackRate = +e.target.value; e.target.blur(); });
   $('#vidMute').addEventListener('click', e => { e.currentTarget.blur(); video.muted = !video.muted; });
   $('#vidFs').addEventListener('click', e => {
@@ -434,6 +458,9 @@ export function createVideos(app) {
     // For the Cut workspace (cut.js): the source clip, and loading any clip.
     current: () => current,
     openClip(c) { loaded = id(c); primed = null; open(c); },
+    scrubTo,
+    // Whether the player already has this clip loaded (proxy or full).
+    holds: (el, c) => el.src.includes(`/clip/${encodeURIComponent(c.shoot)}/${c.key}`) && /(\?|$)/.test(el.src),
     active: () => video,
     // Program playback (cut.js): always draw through the shader, so a
     // transition can blend the two players.
@@ -445,7 +472,7 @@ export function createVideos(app) {
     // Load a clip into the spare player, paused at `at` seconds.
     prime(c, at) {
       const spare = players.find(pl => pl !== video);
-      const src = `/clip/${encodeURIComponent(c.shoot)}/${c.key}`;
+      const src = clipUrl(c);
       primed = { c, el: spare };
       const seek = () => { spare.currentTime = at; };
       if (!spare.src.endsWith(src)) {

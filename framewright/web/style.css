@@ -828,3 +828,5 @@ main.grid > figure { content-visibility: auto; contain-intrinsic-size: auto 100p
   color: var(--soft); font-size: 12px; transition: opacity .5s, transform .5s; }
 .toast strong { color: var(--pick); font-weight: 600; white-space: nowrap; }
 .toast.out { opacity: 0; transform: translateY(6px); }
+.cut-speed { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+#vidFull[aria-pressed="true"] { color: var(--pick); border-color: var(--pick); }

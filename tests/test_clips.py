@@ -197,5 +197,14 @@ class ClipTests(unittest.TestCase):
         label = import_photos.card_label(card)
         self.assertEqual((label["camera"], label["media"]), ("Acme Cine 1", "CFexpress"))
 
+    def test_proxy_commands_and_missing_source(self):
+        cmds = clips._proxy_commands(Path("in.MP4"), Path("out.mp4"), {"size": "3840×2160"})
+        self.assertIn("-g", cmds[-1])                          # short GOP for scrubbing
+        self.assertIn(f"scale=-2:{clips.PROXY_H}", cmds[-1])   # the software fallback
+        if sys.platform == "darwin":
+            self.assertIn("scale_vt=w=960:h=540", cmds[0])
+        self.assertIsNone(clips.make_proxy(self.shoot, "C9999"))
+        self.assertFalse(clips.proxy_path(self.shoot, "C0001").exists())
+
 if __name__ == "__main__":
     unittest.main()
