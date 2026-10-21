@@ -19,7 +19,8 @@ the user-visible problem, the change and how you verified it in pull requests.
 
 When changing recipe fields, update the cleaner, renderer and schema generator
 together, then regenerate `framewright/recipe.schema.json`. Add focused tests
-for behavior, especially data preservation, conflicts and cross-platform paths.
+for behavior, especially data preservation, conflicts and paths
+with spaces or unusual characters.
 
 Contributions are licensed under the repository's MIT license. Preserve the
 separate notices for vendored components. Never add third-party LUTs or film
