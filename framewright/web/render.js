@@ -4,7 +4,7 @@
 export const DEFAULTS = {
   exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
   temp: 0, tint: 0, vibrance: 0, saturation: 0, vignette: 0, grain: 0, grainSize: 25, angle: 0,
-  grainRoughness: 0, grainColor: 0, halation: 0, halationSize: 30, bloom: 0,
+  grainRoughness: 0, grainColor: 0, halation: 0, halationSize: 30, bloom: 0, mist: 0,
   filmResponse: 0, filmContrast: 0, filmLatitude: 0, filmCrossover: 0,
   sharpen: 0, sharpenRadius: 1, noise: 0, colorNoise: 0,
   curve: null, splitShadowHue: 0, splitShadowSat: 0, splitHighlightHue: 0, splitHighlightSat: 0, splitBalance: 0,
@@ -21,7 +21,7 @@ export const DEFAULTS = {
 // result, so tweaking one never changes the other.
 export const LOOK_KEYS = ['temp', 'tint', 'contrast', 'highlights', 'shadows', 'whites', 'blacks',
   'vibrance', 'saturation', 'vignette', 'grain', 'grainSize', 'grainRoughness', 'grainColor',
-  'halation', 'halationSize', 'bloom', 'filmResponse', 'filmContrast', 'filmLatitude', 'filmCrossover', 'curve',
+  'halation', 'halationSize', 'bloom', 'mist', 'filmResponse', 'filmContrast', 'filmLatitude', 'filmCrossover', 'curve',
   'splitShadowHue', 'splitShadowSat', 'splitHighlightHue', 'splitHighlightSat', 'splitBalance', 'lut', 'lutHash'];
 
 // A look's settings: only the look fields, with the curve tidied.
@@ -499,6 +499,10 @@ uniform float grainRough, grainColor;  // 0..1: clumping and a finer layer; each
 uniform int useGlow;
 uniform sampler2D glowTex;
 uniform float halation, bloom;    // 0..1
+// Mist: the whole frame, blurred wide (mistTex, built like the glow), that a
+// diffusion filter scatters over the image.
+uniform sampler2D mistTex;
+uniform float mist;               // 0..1
 uniform float filmAmount;         // 0..1: how much of the film response replaces the plain one
 uniform vec3 filmShape;           // its contrast, latitude and crossover, -1..1
 uniform float pxSize;             // one output pixel, in frame long sides
@@ -535,6 +539,7 @@ const float KEYSTONE = 0.6;   // slider 100 -> strength of the perspective tilt
 const float LENS = 0.25;      // slider 100 -> radial correction at the corners
 const float GROUND = 0.2;     // slider 100 -> bottom edge moves a fifth of the width
 const vec3 HALATION = vec3(1.0, 0.3, 0.1);   // its colour at full strength
+const float MIST = 0.3;       // slider 100 -> share of the light the filter scatters
 // The film response, in stops (log2 exposure) from mid-grey. Our own model,
 // tuned by eye; not measured from or fitted to any film stock.
 const float FILM_GREY = 0.18;
@@ -925,6 +930,11 @@ void main() {
   // Halation: light through the film base reflects back into the red layer,
   // a warm glow round bright highlights. Bloom is the same glow, neutral.
   if (useGlow == 1) rgb += texture(glowTex, t).rgb * (halation * HALATION + bloom * 0.6);
+  // Mist: a diffusion filter spreads some of every point's light over its
+  // surroundings. Bright areas haze into the dark ones round them, shadows
+  // lift and contrast drops, while edges stay sharp under the haze. Only half
+  // the scattered light leaves its source, so lights keep their brightness.
+  if (mist > 0.0) rgb += MIST * mist * (whiteBalance(texture(mistTex, t).rgb, temp, tint) - 0.5 * rgb);
   vec3 scene = rgb;
   if (useProfile == 1) {
     // The camera's tone curve, after exposure so pulling exposure down brings
@@ -991,6 +1001,9 @@ void main() {
 export function glowSigma(size, w, h) {
   return (0.003 + 0.022 * size / 100) * Math.max(w, h);   // source pixels
 }
+export function mistSigma(w, h) {
+  return 0.05 * Math.max(w, h);   // source pixels: a broad haze
+}
 export function glowScale(sigma) {
   return Math.max(1, Math.floor(sigma / 4));   // source pixels per glow pixel
 }
@@ -1005,6 +1018,7 @@ uniform float exposure;
 uniform int linearSrc;
 uniform int useProfile;
 uniform mat3 camMatrix;
+uniform int mode;          // 0: the highlights, for the glow; 1: everything, for mist
 vec3 toLinear(vec3 c) {
   return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
 }
@@ -1022,7 +1036,9 @@ void main() {
   }
   vec3 c = sum / 16.0 * exp2(exposure);
   float m = max(c.r, max(c.g, c.b));
-  color = vec4(c * smoothstep(0.55, 1.0, m), 1.0);
+  // Mist takes all the light, highlights more: a camera JPEG clips them at
+  // white, while the light that scatters into a halo was far brighter.
+  color = vec4(c * (mode == 1 ? 1.0 + 2.0 * smoothstep(0.55, 1.0, m) : smoothstep(0.55, 1.0, m)), 1.0);
 }`;
 
 const GLOW_BLUR = `#version 300 es
@@ -1089,7 +1105,7 @@ export class Renderer {
     this.u = {};
     for (const name of ['img', 'srcSize', 'crop', 'viewport', 'angle', 'vertical', 'horizontal', 'distortion', 'groundShift', 'skyShift', 'horizon', 'areaCount', 'areaPts', 'areaFeather', 'lensK', 'lensScale', 'orient', 'flipH', 'flipV', 'maskCount', 'maskType', 'maskGeo', 'maskShift',
       'maskTex0', 'maskTex1', 'maskTex2', 'maskTex3', 'maskTex4', 'maskTex5', 'maskTex6', 'maskTex7', 'maskAngle', 'maskFalloff', 'maskOpt', 'maskAdjA', 'maskAdjB', 'showMask', 'exposure', 'contrast', 'highlights',
-      'shadows', 'whites', 'blacks', 'temp', 'tint', 'vibrance', 'saturation', 'vignette', 'grain', 'grainSize', 'grainRough', 'grainColor', 'useGlow', 'glowTex', 'halation', 'bloom', 'filmAmount', 'filmShape', 'pxSize', 'seed', 'curveLut', 'useCurve', 'splitShadow', 'splitHigh', 'splitPivot', 'useLook', 'lookAmount', 'lookWb', 'lookTone', 'lookBlacks', 'lookPresence', 'lookCurve', 'lookSplitShadow', 'lookSplitHigh', 'lookSplitPivot', 'useLut', 'lut', 'lutMin', 'lutScale', 'lutSize', 'linearSrc', 'useProfile', 'camMatrix', 'baseCurve', 'baseLog', 'useWarp', 'warpKr', 'warpCentre', 'sharpen', 'sharpenRadius', 'noiseLuma', 'noiseColor']) {
+      'shadows', 'whites', 'blacks', 'temp', 'tint', 'vibrance', 'saturation', 'vignette', 'grain', 'grainSize', 'grainRough', 'grainColor', 'useGlow', 'glowTex', 'halation', 'bloom', 'mistTex', 'mist', 'filmAmount', 'filmShape', 'pxSize', 'seed', 'curveLut', 'useCurve', 'splitShadow', 'splitHigh', 'splitPivot', 'useLook', 'lookAmount', 'lookWb', 'lookTone', 'lookBlacks', 'lookPresence', 'lookCurve', 'lookSplitShadow', 'lookSplitHigh', 'lookSplitPivot', 'useLut', 'lut', 'lutMin', 'lutScale', 'lutSize', 'linearSrc', 'useProfile', 'camMatrix', 'baseCurve', 'baseLog', 'useWarp', 'warpKr', 'warpCentre', 'sharpen', 'sharpenRadius', 'noiseLuma', 'noiseColor']) {
       this.u[name] = gl.getUniformLocation(prog, name);
     }
     this.lut = gl.createTexture();
@@ -1145,8 +1161,9 @@ export class Renderer {
     this.w = this.h = 0;
   }
 
-  // Halation and bloom: two programs and two small textures, on unit 12 (4..11
-  // are the masks'). Float targets when the GPU can render to them.
+  // Halation, bloom and mist: two programs and two small textures each, the
+  // glow on unit 12 (4..11 are the masks') and mist on 13. Float targets when
+  // the GPU can render to them.
   setupGlow() {
     const gl = this.gl;
     this.glowFloat = !!gl.getExtension('EXT_color_buffer_float');
@@ -1158,16 +1175,16 @@ export class Renderer {
       gl.linkProgram(p);
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
       const u = {};
-      for (const n of ['img', 'src', 'srcSize', 'glowSize', 'exposure', 'linearSrc', 'useProfile', 'camMatrix', 'dir', 'sigma']) {
+      for (const n of ['img', 'src', 'srcSize', 'glowSize', 'exposure', 'linearSrc', 'useProfile', 'camMatrix', 'mode', 'dir', 'sigma']) {
         u[n] = gl.getUniformLocation(p, n);
       }
       return { p, u };
     };
     this.glowExtract = program(GLOW_EXTRACT);
     this.glowBlur = program(GLOW_BLUR);
-    this.glowTex = [0, 1].map(() => {
+    const pair = unit => [0, 1].map(() => {
       const t = gl.createTexture();
-      gl.activeTexture(gl.TEXTURE12);
+      gl.activeTexture(gl.TEXTURE0 + unit);
       gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -1176,9 +1193,12 @@ export class Renderer {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
       return t;
     });
+    this.glowTex = pair(12);
+    this.mistTex = pair(13);
     this.glowFb = gl.createFramebuffer();
     gl.activeTexture(gl.TEXTURE0);
     this.glowKey = null;
+    this.mistKey = null;
     this.imageId = 0;
   }
 
@@ -1187,19 +1207,33 @@ export class Renderer {
     const key = `${this.imageId}|${exposure}|${size}`;
     if (key === this.glowKey) return;
     this.glowKey = key;
+    this.blurred(this.glowTex, 12, 0, exposure, glowSigma(size, this.w, this.h));
+  }
+
+  // Builds the mist texture (left on unit 13) for this source and exposure.
+  buildMist(exposure) {
+    const key = `${this.imageId}|${exposure}`;
+    if (key === this.mistKey) return;
+    this.mistKey = key;
+    this.blurred(this.mistTex, 13, 1, exposure, mistSigma(this.w, this.h));
+  }
+
+  // Draws the source, shrunk (the highlights for mode 0, everything for mode
+  // 1), into texs[0] and blurs it by sigma source pixels, through texs[1].
+  blurred(texs, unit, mode, exposure, sigma) {
     const gl = this.gl;
-    const sigma = glowSigma(size, this.w, this.h), d = glowScale(sigma);
+    const d = glowScale(sigma);
     const gw = Math.max(1, Math.ceil(this.w / d)), gh = Math.max(1, Math.ceil(this.h / d));
     const fmt = this.glowFloat ? [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT] : [gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE];
-    for (const t of this.glowTex) {
-      gl.activeTexture(gl.TEXTURE12);
+    for (const t of texs) {
+      gl.activeTexture(gl.TEXTURE0 + unit);
       gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texImage2D(gl.TEXTURE_2D, 0, fmt[0], gw, gh, 0, fmt[1], fmt[2], null);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.glowFb);
     gl.viewport(0, 0, gw, gh);
-    const target = i => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.glowTex[i], 0);
-    // Highlights into texture 0.
+    const target = i => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texs[i], 0);
+    // The source into texture 0.
     const ex = this.glowExtract;
     gl.useProgram(ex.p);
     target(0);
@@ -1211,6 +1245,7 @@ export class Renderer {
     gl.uniform1f(ex.u.exposure, exposure);
     gl.uniform1i(ex.u.linearSrc, this.linear ? 1 : 0);
     gl.uniform1i(ex.u.useProfile, this.profile ? 1 : 0);
+    gl.uniform1i(ex.u.mode, mode);
     if (this.profile) gl.uniformMatrix3fv(ex.u.camMatrix, true, this.profile.matrix.flat());
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     // Blur across into texture 1, then down back into texture 0.
@@ -1218,17 +1253,17 @@ export class Renderer {
     gl.useProgram(bl.p);
     gl.uniform2f(bl.u.glowSize, gw, gh);
     gl.uniform1f(bl.u.sigma, sigma / d);
-    gl.uniform1i(bl.u.src, 12);
+    gl.uniform1i(bl.u.src, unit);
     for (const [from, to, dir] of [[0, 1, [1, 0]], [1, 0, [0, 1]]]) {
       target(to);
-      gl.activeTexture(gl.TEXTURE12);
-      gl.bindTexture(gl.TEXTURE_2D, this.glowTex[from]);
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, texs[from]);
       gl.uniform2f(bl.u.dir, dir[0], dir[1]);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.activeTexture(gl.TEXTURE12);
-    gl.bindTexture(gl.TEXTURE_2D, this.glowTex[0]);
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, texs[0]);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
   }
@@ -1348,12 +1383,16 @@ export class Renderer {
     const bloom = tone ? Math.min(1, (p.bloom + (Lg ? Lg.bloom * amtG : 0)) / 100) : 0;
     const glowSize = p.halation > 0 || p.bloom > 0 || !Lg ? p.halationSize : Lg.halationSize;
     if (halation > 0 || bloom > 0) this.buildGlow(p.exposure, glowSize);
+    const mist = tone ? Math.min(1, (p.mist + (Lg ? Lg.mist * amtG : 0)) / 100) : 0;
+    if (mist > 0) this.buildMist(p.exposure);
     gl.viewport(0, 0, outW, outH);
     gl.useProgram(this.prog);
     gl.uniform1i(this.u.useGlow, halation > 0 || bloom > 0 ? 1 : 0);
     gl.uniform1i(this.u.glowTex, 12);
     gl.uniform1f(this.u.halation, halation);
     gl.uniform1f(this.u.bloom, bloom);
+    gl.uniform1i(this.u.mistTex, 13);
+    gl.uniform1f(this.u.mist, mist);
     gl.uniform1i(this.u.img, 0);
     gl.uniform2f(this.u.srcSize, fw, fh);
     gl.uniform1i(this.u.orient, ((opts.tone === false ? 0 : p.orient) / 90) & 3);

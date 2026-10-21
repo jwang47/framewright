@@ -151,6 +151,7 @@ EDIT_RANGES = {
     "halation": (0.0, 100.0),         # red glow bleeding round bright highlights
     "halationSize": (0.0, 100.0),
     "bloom": (0.0, 100.0),            # the same glow, neutral
+    "mist": (0.0, 100.0),             # a diffusion filter: haze round light, lifted shadows
     "filmResponse": (0.0, 100.0),     # film's negative and print in place of the plain tone response
     "filmContrast": (-100.0, 100.0),  # the print's contrast
     "filmLatitude": (-100.0, 100.0),  # how softly highlights and shadows roll off
@@ -180,7 +181,7 @@ EDIT_RANGES = {
 # recipe's own settings, with lookAmount (0..100, default 100) mixing it in.
 LOOK_FIELDS = ("temp", "tint", "contrast", "highlights", "shadows", "whites", "blacks",
                "vibrance", "saturation", "vignette", "grain", "grainSize", "grainRoughness",
-               "grainColor", "halation", "halationSize", "bloom", "filmResponse", "filmContrast",
+               "grainColor", "halation", "halationSize", "bloom", "mist", "filmResponse", "filmContrast",
                "filmLatitude", "filmCrossover", "curve",
                "splitShadowHue", "splitShadowSat", "splitHighlightHue", "splitHighlightSat",
                "splitBalance", "lut", "lutHash")

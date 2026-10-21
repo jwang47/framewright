@@ -42,6 +42,7 @@ const SLIDERS = [
   { g: 'detail', k: 'noise', label: 'Noise', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
   { g: 'detail', k: 'colorNoise', label: 'Colour noise', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
   { g: 'fx', k: 'vignette', label: 'Vignette', min: -100, max: 100, step: 1 },
+  { g: 'fx', k: 'mist', label: 'Mist', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
   { g: 'film', k: 'grain', label: 'Grain', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
   { g: 'film', k: 'grainSize', label: 'Grain size', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}`, neutral: 25 },
   { g: 'film', k: 'grainRoughness', label: 'Roughness', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
