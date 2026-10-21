@@ -159,9 +159,8 @@ class ClipTests(unittest.TestCase):
         status, _, body = request("GET", "/api/frames?all=1")
         self.assertEqual(json.loads(body)["frames"], [])    # this library has only a clip
 
-        # Formatting wants the typed name and a plugged-in card.
-        self.assertEqual(request("POST", "/api/card/format", {"card": "NOPE", "confirm": "NOPE"})[0],
-                         409 if sys.platform == "darwin" else 400)
+        # Checking a card wants a plugged-in card.
+        self.assertEqual(request("POST", "/api/card/verify", {"card": "NOPE"})[0], 409)
 
     def test_collections_newest_first(self):
         from framewright import server
@@ -172,24 +171,19 @@ class ClipTests(unittest.TestCase):
         dates = sorted(((server.collection_date(c), c["name"]) for c in trips), reverse=True)
         self.assertEqual([n for _, n in dates], ["New trip", "Portfolio", "Old trip", "Empty"])
 
-    def test_format_refuses_until_everything_is_imported(self):
+    def test_check_before_formatting(self):
         from framewright import server
         card = self.base / "CARD"
         (card / "DCIM" / "100MSDCF").mkdir(parents=True)
         (card / "DCIM" / "100MSDCF" / "DSC00001.JPG").write_bytes(b"photo")
-        volume = {"FilesystemType": "exfat", "DeviceIdentifier": "disk99s1"}
-        calls = []
-        fake_run = lambda cmd, **kw: calls.append(cmd) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-        with patch.object(server, "card_volume", return_value=volume), patch.object(server.subprocess, "run", fake_run):
-            server._format.update(running=True, error=None, done=False)
-            server.run_format(self.shoot.parent, card)
-            self.assertIn("not in the library yet", server._format["error"])
-            self.assertEqual(calls, [])
-            with patch.object(server, "card_plan", return_value={}):
-                server._format.update(running=True, error=None, done=False)
-                server.run_format(self.shoot.parent, card)
-        self.assertTrue(server._format["done"])
-        self.assertEqual(calls, [["diskutil", "eraseVolume", "ExFAT", "CARD", "disk99s1"]])
+        server._verify.update(running=True, error=None, safe=False)
+        server.run_verify(self.shoot.parent, card)
+        self.assertEqual((server._verify["safe"], server._verify["missing"]), (False, 1))
+        with patch.object(server, "card_plan", return_value={}):
+            server._verify.update(running=True, error=None, safe=False)
+            server.run_verify(self.shoot.parent, card)
+        self.assertTrue(server._verify["safe"])
+        self.assertFalse(hasattr(server, "run_format"))      # Framewright never erases a card
 
     def test_card_names_and_labels(self):
         from framewright import server, import_photos

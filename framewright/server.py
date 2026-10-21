@@ -1136,14 +1136,15 @@ def run_offload(root: Path, shoots: list[str]) -> None:
         state["current"] = None
 
 
-# --- formatting a card -----------------------------------------------------------
+# --- checking a card before formatting it ------------------------------------------
 #
-# After an import, a card can be erased for reuse. The job first re-plans the
-# import, which hashes every photo and clip on the card against its verified
-# copy; anything not safely in the library stops it. Only then does diskutil
-# erase the card's own volume, keeping its file system and name. macOS only.
+# The camera formats the card (it sets up its own database there), so
+# Framewright never erases one. Before you do, Check re-reads every library
+# copy of the card's photos and clips: a store copy must hash to the
+# fingerprint taken from the card at import. It ends in "safe to format" or a
+# count of what isn't in the library yet.
 
-_format: dict = {"running": False}
+_verify: dict = {"running": False}
 _cut_export: dict = {"running": False}
 
 
@@ -1186,15 +1187,14 @@ def rename_card(card: Path, name: str) -> None:
         raise ValueError((result.stderr or result.stdout).strip() or "diskutil couldn't rename the card")
 
 
-def run_format(root: Path, card: Path, new_name: str | None = None) -> None:
-    state = _format
+def run_verify(root: Path, card: Path) -> None:
+    state = _verify
     try:
-        state["phase"] = "checking"
-        info = card_volume(card)
         from . import import_photos
         media = [f for d in import_photos.media_dirs(card) for f in d.rglob("*")
                  if f.is_file() and import_photos.is_media(f)]
-        state.update(bytes=0, bytes_total=sum(f.stat().st_size for f in media))
+        state.update(bytes=0, bytes_total=sum(f.stat().st_size for f in media), files=len(media))
+
         def progress(n: int) -> None:
             state["bytes"] = state.get("bytes", 0) + n
         import_photos.HASH_PROGRESS = progress
@@ -1202,19 +1202,9 @@ def run_format(root: Path, card: Path, new_name: str | None = None) -> None:
             pending = card_plan(root, [card], False, strict=True)
         finally:
             import_photos.HASH_PROGRESS = None
-        if pending:
-            n = sum(len(v) for v in pending.values())
-            raise ValueError(f"{n} files on {card.name} are not in the library yet; import them first")
-        state["phase"] = "erasing"
-        personality = "ExFAT" if info["FilesystemType"] == "exfat" else "MS-DOS FAT32"
-        name = new_name or card.name
-        name = name if info["FilesystemType"] == "exfat" else name.upper()[:11]
-        result = subprocess.run(["diskutil", "eraseVolume", personality, name, info["DeviceIdentifier"]],
-                                capture_output=True, text=True, timeout=300)
-        if result.returncode:
-            raise ValueError((result.stderr or result.stdout).strip() or "diskutil failed")
-        state["done"] = True
-    except (ImportError_, OSError, ValueError, subprocess.SubprocessError) as exc:
+        state["missing"] = sum(len(v) for v in pending.values())
+        state["safe"] = not pending and bool(media)
+    except (ImportError_, OSError, ValueError) as exc:
         state["error"] = str(exc)
     finally:
         state["running"] = False
@@ -1465,8 +1455,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({k: v for k, v in _cut_export.items() if k != "pid"})
             return
 
-        if parts == ["api", "card", "format"]:
-            self.send_json(dict(_format))
+        if parts == ["api", "card", "verify"]:
+            self.send_json(dict(_verify))
             return
 
         if parts == ["api", "offload"]:
@@ -1971,13 +1961,13 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "that card is not plugged in"}, HTTPStatus.CONFLICT)
                     return
                 _volume_info.pop(str(card), None)
-                if _import.get("running") or _format.get("running"):
-                    self.send_json({"error": "wait for the import or format to finish"}, HTTPStatus.CONFLICT)
+                if _import.get("running") or _verify.get("running"):
+                    self.send_json({"error": "wait for the import or check to finish"}, HTTPStatus.CONFLICT)
                     return
                 rename_card(card, clean_card_name(body.get("name")))
                 self.send_json({"ok": True})
-            elif url.path == "/api/card/format":
-                self.api_format(json.loads(self.read_body() or b"{}"))
+            elif url.path == "/api/card/verify":
+                self.api_verify(json.loads(self.read_body() or b"{}"))
             elif url.path == "/api/offload":
                 self.api_offload(json.loads(self.read_body() or b"{}"))
             elif url.path == "/api/proposal":
@@ -2155,28 +2145,21 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=cuts.export, args=(self.root, slug, size, codec, _cut_export), daemon=True).start()
         self.send_json({k: v for k, v in _cut_export.items() if k != "pid"})
 
-    def api_format(self, body: dict) -> None:
-        """Erase one card, named in the request, once all of it is imported."""
-        if sys.platform != "darwin":
-            self.send_json({"error": "format the card in the camera"}, HTTPStatus.BAD_REQUEST)
-            return
+    def api_verify(self, body: dict) -> None:
+        """Check that everything on a card is safely in the library."""
         cards = {c.name: c for c in plugged_cards()}
-        card = cards.get(str(body.get("card", "")))
+        card = cards.get(str(body.get("card", ""))) or (next(iter(cards.values())) if len(cards) == 1 else None)
         if card is None:
             self.send_json({"error": "that card is not plugged in"}, HTTPStatus.CONFLICT)
             return
-        if body.get("confirm") != card.name:
-            self.send_json({"error": "type the card's name to confirm"}, HTTPStatus.BAD_REQUEST)
-            return
-        new_name = clean_card_name(body["name"]) if body.get("name") else None
         with _import_lock:
-            if _import.get("running") or _offload.get("running") or _format.get("running"):
+            if _import.get("running") or _offload.get("running") or _verify.get("running"):
                 self.send_json({"error": "wait for the import or offload to finish"}, HTTPStatus.CONFLICT)
                 return
-            _format.clear()
-            _format.update(running=True, card=card.name, phase="checking", error=None, done=False)
-        threading.Thread(target=run_format, args=(self.root, card, new_name), daemon=True).start()
-        self.send_json(dict(_format))
+            _verify.clear()
+            _verify.update(running=True, card=card.name, error=None, safe=False, missing=0)
+        threading.Thread(target=run_verify, args=(self.root, card), daemon=True).start()
+        self.send_json(dict(_verify))
 
     def api_eject(self) -> None:
         cards = plugged_cards() or empty_cards()

@@ -1670,7 +1670,7 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     $('#importCard').textContent = res.label || card;
     $('#cardName').textContent = res.label || card;
     $('#importEject').hidden = !res.eject;
-    $('#importFormat').hidden = !res.eject || !!res.error || (res.groups || []).length > 0;
+    $('#importVerify').hidden = !!res.error || (res.groups || []).length > 0;
     cards = res.cards || [];
     const total = groups.reduce((t, g) => t + g.mb, 0);
     $('#importPlan').innerHTML = res.error ? `<p class="none">${res.error}</p>`
@@ -1808,50 +1808,46 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       app.status(`couldn't eject: ${e.message}`, 0);
     }
   });
-  // Format: offered once everything on the card is in the library. The server
-  // re-checks every file by hash before erasing, and wants the name typed.
-  $('#importFormat').addEventListener('click', async () => {
-    // With several cards connected, the name typed picks which one.
-    const which = cards.length > 1 ? `one of: ${cards.join(', ')}` : `"${cards[0]}"`;
-    const typed = prompt(`Erase everything on ${which}? Framewright first checks that every photo and clip on the card is safely in the library, then formats it (keeping its name). Files Framewright doesn't import are erased too.\n\nType the name of the card to format:`);
-    if (typed === null) return;
-    const name = typed.trim();
-    if (!cards.includes(name)) return app.status(`no connected card is called "${name}"`, 4000);
-    const suggest = labels[name]?.short || name;
-    const newName = prompt('Name the card (up to 11 letters or digits; Finder and other computers show it):', suggest);
-    if (newName === null) return;
+  // Check before formatting: the camera formats the card; this confirms first
+  // that every photo and clip on it is safely in the library.
+  $('#importVerify').addEventListener('click', async () => {
+    const name = cards.length > 1 ? prompt(`Check which card? ${cards.join(', ')}`, cards[0])?.trim() : cards[0];
+    if (!name || !cards.includes(name)) return;
+    const label = labels[name]?.label || name;
+    $('#importProgress').hidden = false;
     try {
-      await app.post('/api/card/format', { card: name, confirm: name, name: newName.trim() || name });
+      await app.post('/api/card/verify', { card: name });
       let st;
       do {
-        await new Promise(r => setTimeout(r, 700));
-        st = await (await fetch('/api/card/format')).json();
-        const pct = st.bytes_total ? Math.min(100, Math.round(st.bytes / st.bytes_total * 100)) : 0;
-        const frac = st.phase === 'erasing' ? 1 : pct / 100;
+        await new Promise(r => setTimeout(r, 500));
+        st = await (await fetch('/api/card/verify')).json();
+        const frac = st.bytes_total ? Math.min(1, st.bytes / st.bytes_total) : 0;
         $('#importBar').value = frac;
         // The same progress along the top, in the sidebar's card box and on the Dock.
         bar.classList.add('on', 'determinate');
         bar.style.setProperty('--pct', `${frac * 100}%`);
         $('#cardBar').hidden = false;
         $('#cardBar').style.setProperty('--pct', `${frac * 100}%`);
-        btn.textContent = st.phase === 'erasing' ? 'Formatting…' : `Verifying ${pct}%`;
+        btn.textContent = `Checking ${Math.round(frac * 100)}%`;
         native({ type: 'import', running: true, progress: frac });
-        $('#importNow').textContent = st.phase === 'erasing' ? `formatting ${name}…`
-          : `verifying the library's copies of ${name} · ${pct}%`;
-        $('#importProgress').hidden = false;
+        $('#importNow').textContent = `checking the library's copies of ${label} · ${Math.round(frac * 100)}%`;
       } while (st.running);
       if (st.error) throw new Error(st.error);
-      $('#importNow').textContent = `${name} formatted; it's empty and ready for the camera`;
-      app.status(`formatted ${name}`, 5000);
-      notify('Card formatted', `${name} is empty and ready for the camera.`);
+      if (st.safe) {
+        $('#importNow').textContent = `Everything on ${label} is safely in the library. Safe to format it in the camera.`;
+        notify('Safe to format', `Everything on ${label} is in the library.`);
+      } else {
+        $('#importNow').textContent = st.missing
+          ? `${st.missing} files on ${label} aren't in the library yet. Import before formatting.`
+          : `${label} has nothing to check.`;
+      }
     } catch (e) {
-      $('#importNow').textContent = `not formatted: ${e.message}`;
-      app.status(`not formatted: ${e.message}`, 0);
+      $('#importNow').textContent = `check stopped: ${e.message}`;
     }
     bar.classList.remove('on', 'determinate');
     $('#cardBar').hidden = true;
     native({ type: 'import', running: false, progress: 0 });
-    await loadPlan().catch(() => {});
+    label && loadPlan().then(() => {}).catch(() => {});
   });
 
   $('#cardCancel').addEventListener('click', () => $('#importCancel').click());
