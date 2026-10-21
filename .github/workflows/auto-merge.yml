@@ -1,0 +1,17 @@
+name: Auto-merge
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  enable:
+    # Same-repo, non-draft PRs only; fork PRs get a read-only token anyway.
+    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh pr merge --auto --merge "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
