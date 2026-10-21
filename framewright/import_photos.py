@@ -75,14 +75,8 @@ class ImportError_(Exception):
 
 
 def default_library() -> Path:
-    """Resolve the configured library, never the application checkout."""
-    library = resolve_library()
-    if library is None:
-        raise ImportError_(
-            "no library configured; pass --library <path>, set STUDIO_LIBRARY, "
-            "or choose a library in Framewright"
-        )
-    return library
+    """The configured library, otherwise ~/Pictures/Framewright; never the checkout."""
+    return resolve_library()
 
 
 def windows_removable(root: str) -> bool:
@@ -669,7 +663,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--library",
-        help="directory holding shoot folders (default: STUDIO_LIBRARY or saved config)",
+        help="directory holding shoot folders (default: STUDIO_LIBRARY, saved config, or ~/Pictures/Framewright)",
     )
     parser.add_argument(
         "--name",
@@ -722,7 +716,7 @@ def main(argv: list[str] | None = None) -> int:
         pattern, delete_from_card = import_settings()
         if args.delete_from_card is not None:
             delete_from_card = args.delete_from_card
-        library = resolve_library(args.library) if args.library else default_library()
+        library = resolve_library(args.library)
         if args.offload is not None:
             return offload(library, args.offload, args.dry_run)
         # Without --source, every plugged-in card imports, one camera's day per folder.

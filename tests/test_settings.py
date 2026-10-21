@@ -28,8 +28,13 @@ class SettingsTests(unittest.TestCase):
         self.config.parent.mkdir(exist_ok=True)
         self.config.write_text(json.dumps(data))
 
-    def test_no_config_has_no_library_or_store_and_does_not_write(self):
-        self.assertIsNone(settings.resolve_library())
+    def test_no_config_defaults_library_to_home_and_does_not_write(self):
+        home = self.base / "home"
+        with patch.object(settings.Path, "home", return_value=home):
+            self.assertEqual(settings.resolve_library(), home / "Pictures" / "Framewright")
+            with patch.dict(os.environ, {"STUDIO_LIBRARY": str(self.base / "environment")}):
+                self.assertEqual(settings.resolve_library(), self.base / "environment")
+        self.assertFalse(home.exists())
         self.assertIsNone(settings.configured_store())
         self.assertEqual(settings.configured_port(), 8765)
         self.assertFalse(self.config.exists())
