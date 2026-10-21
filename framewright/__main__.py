@@ -8,11 +8,13 @@ def main(argv=None):
     if args == ["--version"]:
         print(f"Framewright {__version__}")
         return 0
-    command = args.pop(0) if args and args[0] in {"serve", "render", "import", "schema"} else "serve"
+    command = args.pop(0) if args and args[0] in {"serve", "render", "import", "schema", "lenses"} else "serve"
     if command == "render":
         from .render import main as run
     elif command == "import":
         from .import_photos import main as run
+    elif command == "lenses":
+        from .lenses import main as run
     elif command == "schema":
         from .recipe_schema import main as run
     else:

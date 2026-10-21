@@ -818,7 +818,7 @@ export function createDevelop(app) {
     $('#lensInfo').textContent = st.dngLens ? 'corrected from the lens data in the DNG'
       : info?.inCamera ? `${info.profile.model}: already applied by the camera`
       : info?.profile ? `${info.model} @ ${info.focal}mm`
-      : info ? `no profile for ${info.model}` : 'no lens info';
+      : info ? `no profile for ${info.model} · use Distortion below` : 'no lens info';
   }
 
   $('#lensOn').addEventListener('change', e => {
