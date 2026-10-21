@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "framewright"
 version = "0.1.0"
-description = "A local photo editor with plain-text recipes and live AI proposals"
+description = "An all-in-one media manager and photo/video editor with plain-text recipes and live AI proposals"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
