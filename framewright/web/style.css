@@ -759,3 +759,31 @@ main.small .frame .dur { display: flex; }
 main.small .frame .dur em { display: none; }
 /* Big grids: tiles off screen skip layout and paint. */
 main.grid > figure { content-visibility: auto; contain-intrinsic-size: auto 100px; }
+
+/* Cut phase 2: lanes for titles, clips (absolute, so transitions overlap) and music. */
+.cut-lanes { position: relative; min-width: 100%; }
+.cut-titles { position: relative; height: 22px; margin-bottom: 3px; }
+.cut-blocks { position: relative; display: block; height: 72px; }
+.cut-clip { position: absolute; top: 0; bottom: 0; }
+.cut-clip.slow { box-shadow: inset 0 -3px 0 var(--focus); }
+.cut-join { position: absolute; top: 26px; width: 18px; height: 18px; padding: 0; border-radius: 50%; z-index: 4;
+  font-size: 10px; line-height: 16px; text-align: center; background: var(--panel); border: 1px solid var(--line2); color: var(--muted);
+  opacity: .0; transition: opacity .15s; }
+.cut-blocks:hover .cut-join, .cut-join.cross, .cut-join.dip { opacity: 1; }
+.cut-join.cross, .cut-join.dip { background: var(--pick); color: #141413; border-color: var(--pick); }
+.cut-tblock { position: absolute; top: 0; height: 22px; border-radius: 5px; background: #3a3355; border: 1px solid #574d80;
+  color: #E4DFFF; font-size: 11px; padding: 0 8px; box-sizing: border-box; display: flex; align-items: center; overflow: hidden;
+  white-space: nowrap; cursor: grab; }
+.cut-tblock span { overflow: hidden; text-overflow: ellipsis; }
+.cut-tblock.sel { border: 2px solid var(--pick); }
+.cut-tblock .trim { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
+.cut-music { position: relative; height: 22px; margin-top: 3px; cursor: pointer; }
+.cut-mblock { height: 22px; border-radius: 5px; background: #24302B; border: 1px solid #2E3C35; color: #A9D8BE;
+  font-size: 11px; padding: 0 8px; box-sizing: border-box; display: flex; align-items: center; white-space: nowrap; overflow: hidden; }
+.cut-head { margin-left: 0; top: 0; bottom: 0; }
+.cut-area { padding: 0 12px; }
+.music-form { display: grid; gap: 10px; margin: 8px 0 12px; }
+.music-form label { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.music-form .upload input { max-width: 220px; }
+.music-form input[type=range] { flex: 1; accent-color: var(--pick); }
+.music-form input[type=number] { width: 80px; background: var(--panel2); color: var(--text); border: 1px solid var(--line2); border-radius: 6px; padding: 4px 6px; }

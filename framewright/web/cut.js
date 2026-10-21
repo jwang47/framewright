@@ -1,33 +1,45 @@
 // Cut: assemble clips into an edit. The clip bin and player are the Videos
-// grid (videos.js); this adds the cut itself — a timeline of trimmed clips
-// saved as <library>/cuts/<slug>.cut.json — program playback across clips,
-// and export through ffmpeg (cuts.py).
+// grid (videos.js); this adds the cut itself — clips on a timeline, saved as
+// <library>/cuts/<slug>.cut.json (cuts.py documents the format) — gapless
+// program playback, and export through ffmpeg.
 //
 // Source mode: the player shows the bin's clip; I and O mark in and out, E
-// appends that range. Program mode: clicking the timeline plays the cut; B
-// splits at the playhead, ⌫ ripple-deletes the selected clip, ⌘Z undoes.
+// appends that range. Program mode (click the timeline): Space plays the cut,
+// handing off between two players so cuts don't stall; transitions blend the
+// two through the player's shader. B splits, ⌫ deletes, C adds or changes a
+// transition, M toggles slow motion on 120p clips, T adds a title, ⌘Z undoes.
 
 const $ = s => document.querySelector(s);
+const db = g => Math.min(1, Math.pow(10, (g || 0) / 20));
 
 export function createCut(app, videos) {
-  const video = $('#vidPlayer'), track = $('#cutTrack');
+  const music = $('#cutMusic'), overlay = $('#cutTitle'), track = $('#cutTrack');
   let cut = null, slug = null, list = [], meta = new Map();
-  let mode = 'source', playhead = 0, selected = -1, playing = false, at = -1;
+  let mode = 'source', playhead = 0, playing = false, at = -1;
+  let sel = { kind: null, i: -1 };
   let marks = { in: null, out: null }, history = [], future = [], saveTimer = null;
 
-  const ref = c => `${c.shoot}/${c.key}`;
-  const len = c => c.out - c.in;
-  const total = () => (cut?.clips || []).reduce((t, c) => t + len(c), 0);
   const clock = videos.clock;
+  const clips = () => cut?.clips || [];
+  const speedOf = c => c.speed || 1;
+  const len = c => (c.out - c.in) / speedOf(c);
+  const starts = () => {
+    const out = [];
+    let t = 0;
+    clips().forEach((c, i) => { if (i) t -= c.trans?.dur || 0; out.push(t); t += len(c); });
+    return out;
+  };
+  const total = () => { const s = starts(), cs = clips(); return cs.length ? s.at(-1) + len(cs.at(-1)) : 0; };
+  const info = c => meta.get(c.shoot)?.get(c.key);
+  const fpsOut = () => info(clips()[0] || {})?.fps || 23.976;
 
   // --- loading and saving -------------------------------------------------------
 
   async function refreshList(keep) {
     list = (await (await fetch('/api/cuts')).json()).cuts;
-    const sel = $('#cutPick');
-    sel.innerHTML = list.map(c => `<option value="${c.slug}">${c.name}</option>`).join('') +
+    $('#cutPick').innerHTML = list.map(c => `<option value="${c.slug}">${c.name}</option>`).join('') +
       '<option value="">+ New cut…</option>';
-    sel.value = keep ?? slug ?? '';
+    $('#cutPick').value = keep ?? slug ?? '';
   }
 
   async function clipMeta(shoot) {
@@ -36,17 +48,18 @@ export function createCut(app, videos) {
     const days = res.ok ? (await res.json()).days : [];
     meta.set(shoot, new Map(days.flatMap(d => d.clips).map(c => [c.key, c])));
   }
-  const info = c => meta.get(c.shoot)?.get(c.key);
 
   async function open(which) {
     if (!which) return;
     const res = await fetch(`/api/cut?slug=${encodeURIComponent(which)}`);
     if (!res.ok) return app.status('that cut is gone', 3000);
+    stop();
     cut = (await res.json()).cut;
+    cut.titles ||= [];
     slug = which;
-    await Promise.all([...new Set(cut.clips.map(c => c.shoot))].map(clipMeta));
-    history = []; future = []; playhead = 0; selected = -1;
     $('#cutPick').value = slug;
+    await Promise.all([...new Set(cut.clips.map(c => c.shoot))].map(clipMeta));
+    history = []; future = []; playhead = 0; sel = { kind: null, i: -1 };
     try { localStorage.setItem('studio.cut', slug); } catch { /* private window */ }
     paint();
   }
@@ -64,13 +77,23 @@ export function createCut(app, videos) {
     }
   }
 
+  const snapshot = () => JSON.stringify({ clips: cut.clips, titles: cut.titles, music: cut.music, clipGain: cut.clipGain });
+  const restore = text => Object.assign(cut, JSON.parse(text));
+
   function change(fn) {
     if (!cut) return app.status('make a cut first: + New cut', 3000);
-    history.push(JSON.stringify(cut.clips));
+    history.push(snapshot());
     future = [];
-    fn(cut.clips);
+    fn(cut);
     paint();
     save();
+  }
+
+  function body() {
+    const out = { name: cut.name, clips: cut.clips, log709: cut.log709, titles: cut.titles };
+    if (cut.music) out.music = cut.music;
+    if (cut.clipGain) out.clipGain = cut.clipGain;
+    return out;
   }
 
   function save() {
@@ -78,7 +101,7 @@ export function createCut(app, videos) {
     $('#cutState').textContent = 'saving…';
     saveTimer = setTimeout(async () => {
       try {
-        const res = await app.post('/api/cut/save', { slug, cut: { name: cut.name, clips: cut.clips, log709: cut.log709 } });
+        const res = await app.post('/api/cut/save', { slug, cut: body() });
         if (res.slug !== slug) { slug = res.slug; await refreshList(slug); }
         $('#cutState').textContent = 'saved';
       } catch (e) {
@@ -90,8 +113,8 @@ export function createCut(app, videos) {
   function undo(redo = false) {
     const from = redo ? future : history, to = redo ? history : future;
     if (!cut || !from.length) return;
-    to.push(JSON.stringify(cut.clips));
-    cut.clips = JSON.parse(from.pop());
+    to.push(snapshot());
+    restore(from.pop());
     paint();
     save();
   }
@@ -102,139 +125,241 @@ export function createCut(app, videos) {
     const src = videos.current();
     if (!src) return app.status('choose a clip in the bin first', 2500);
     if (!src.online) return app.status(`${src.key} is on a drive that is not plugged in`, 3000);
-    const dur = src.duration || video.duration || 0;
+    const dur = src.duration || videos.active().duration || 0;
     const start = marks.in ?? 0, end = marks.out ?? dur;
     if (!(end > start)) return app.status('out must come after in', 2500);
     if (!meta.has(src.shoot)) meta.set(src.shoot, new Map());
     meta.get(src.shoot).set(src.key, src);
-    change(cs => cs.push({ shoot: src.shoot, key: src.key, in: +start.toFixed(3), out: +end.toFixed(3) }));
+    change(k => k.clips.push({ shoot: src.shoot, key: src.key, in: +start.toFixed(3), out: +end.toFixed(3) }));
     marks = { in: null, out: null };
     paintMarks();
     app.status(`added ${src.key} (${clock(end - start)})`);
   }
 
   function locate(t) {
-    let acc = 0;
-    for (let i = 0; i < cut.clips.length; i++) {
-      const l = len(cut.clips[i]);
-      if (t < acc + l || i === cut.clips.length - 1) return { i, offset: Math.max(0, Math.min(l, t - acc)), start: acc };
-      acc += l;
-    }
+    const s = starts(), cs = clips();
+    for (let i = cs.length - 1; i >= 0; i--) if (t >= s[i] || i === 0) return { i, offset: Math.max(0, Math.min(len(cs[i]), t - s[i])) };
     return null;
   }
 
   function split() {
     const hit = cut && locate(playhead);
-    if (!hit || hit.offset < 0.05 || len(cut.clips[hit.i]) - hit.offset < 0.05) return app.status('move the playhead inside a clip to split it', 2500);
-    change(cs => {
-      const c = cs[hit.i], cutAt = +(c.in + hit.offset).toFixed(3);
-      cs.splice(hit.i, 1, { ...c, out: cutAt }, { ...c, in: cutAt });
+    if (!hit || hit.offset < 0.05 || len(clips()[hit.i]) - hit.offset < 0.05) return app.status('move the playhead inside a clip to split it', 2500);
+    change(k => {
+      const c = k.clips[hit.i], cutAt = +(c.in + hit.offset * speedOf(c)).toFixed(3);
+      const { trans, ...rest } = c;
+      k.clips.splice(hit.i, 1, { ...c, out: cutAt }, { ...rest, in: cutAt });
     });
-    selected = hit.i + 1;
+    sel = { kind: 'clip', i: hit.i + 1 };
     paint();
   }
 
   function remove() {
-    if (selected < 0 || !cut?.clips[selected]) return;
-    const i = selected;
-    change(cs => cs.splice(i, 1));
-    selected = Math.min(i, cut.clips.length - 1);
-    playhead = Math.min(playhead, total());
+    if (sel.kind === 'title' && cut?.titles[sel.i]) {
+      const i = sel.i;
+      change(k => k.titles.splice(i, 1));
+    } else if (sel.kind === 'clip' && cut?.clips[sel.i]) {
+      const i = sel.i;
+      change(k => { k.clips.splice(i, 1); if (k.clips[0]) delete k.clips[0].trans; });
+      sel.i = Math.min(i, clips().length - 1);
+      playhead = Math.min(playhead, total());
+    } else return;
     paint();
   }
 
-  // --- program playback: hand off from clip to clip ---------------------------------
-
-  function load(i, offset, play) {
-    const c = cut.clips[i], m = info(c);
-    if (!m) return app.status(`${c.key} isn't in the library`, 3000);
-    if (!m.online) { stop(); return app.status(`${c.key} is on a drive that is not plugged in`, 3000); }
-    at = i;
-    videos.openClip(m);
-    const go = () => {
-      video.currentTime = c.in + offset;
-      if (play) video.play().catch(() => {});
-    };
-    if (video.readyState >= 1 && video.src.endsWith(`/${c.key}`)) go();
-    else video.addEventListener('loadedmetadata', go, { once: true });
+  // None → crossfade → dip to black → none, on the transition into a clip.
+  function cycleTransition(i, longer = false) {
+    if (!cut?.clips[i] || i === 0) return app.status('select a clip after the first to add a transition into it', 3000);
+    change(k => {
+      const c = k.clips[i], room = Math.min(len(c), len(k.clips[i - 1])) / 2;
+      if (longer && c.trans) {
+        const steps = [0.25, 0.5, 1, 2], next = steps.find(s => s > c.trans.dur + 0.01) ?? steps[0];
+        c.trans.dur = Math.min(next, room);
+      } else if (!c.trans) c.trans = { type: 'cross', dur: Math.min(0.5, room) };
+      else if (c.trans.type === 'cross') c.trans.type = 'dip';
+      else delete c.trans;
+    });
+    const t = clips()[i].trans;
+    app.status(t ? `${t.type === 'dip' ? 'dip to black' : 'crossfade'}, ${t.dur}s` : 'cut');
   }
 
-  function seek(t, play = playing) {
-    if (!cut?.clips.length) return;
+  // A 120p clip plays as slow motion in a 24p cut: speed = cut fps / clip fps.
+  function toggleSlow(i) {
+    const c = cut?.clips[i];
+    if (!c) return app.status('select a clip on the timeline', 2500);
+    const m = info(c), fps = m?.captureFps || m?.fps || 0;
+    change(k => {
+      const x = k.clips[i];
+      if (x.speed && x.speed !== 1) delete x.speed;
+      else x.speed = fps > fpsOut() * 1.5 ? +(fpsOut() / fps).toFixed(4) : 0.5;
+    });
+    const s = clips()[i].speed;
+    app.status(s ? `slow motion ×${(1 / s).toFixed(1)} (silent)` : 'normal speed');
+  }
+
+  function addTitle() {
+    if (!cut) return app.status('make a cut first: + New cut', 3000);
+    const text = prompt('Title text:');
+    if (!text?.trim()) return;
+    const lower = confirm('Show it as a lower third? (Cancel centres it.)');
+    change(k => k.titles.push({ text: text.trim(), at: +playhead.toFixed(2), dur: 3, style: lower ? 'lower' : 'center' }));
+    sel = { kind: 'title', i: cut.titles.length - 1 };
+    paint();
+  }
+
+  // --- program playback: two players, handed off at each edit ----------------------
+
+  function startAt(t, play) {
+    const cs = clips();
+    if (!cs.length) return;
+    mode = 'program';
+    videos.program(true);
     playhead = Math.max(0, Math.min(total(), t));
-    const hit = locate(playhead);
-    load(hit.i, hit.offset, play);
+    const hit = locate(playhead), c = cs[hit.i], m = info(c);
+    if (!m?.online) { stop(); return app.status(`${c.key} is on a drive that is not plugged in`, 3000); }
+    at = hit.i;
+    videos.openClip(m);
+    const el = videos.active();
+    const go = () => {
+      el.currentTime = c.in + hit.offset * speedOf(c);
+      setRate(el, c);
+      el.volume = db(cut.clipGain);
+      if (play) el.play().catch(() => {});
+      primeNext();
+    };
+    if (el.readyState >= 1 && el.src.endsWith(`/${c.key}`)) go();
+    else el.addEventListener('loadedmetadata', go, { once: true });
+    if (play) startMusic();
     paintHead();
+    paintMarks();
+  }
+
+  function setRate(el, c) {
+    el.playbackRate = speedOf(c);
+    el.muted = speedOf(c) !== 1;
+  }
+
+  function primeNext() {
+    const next = clips()[at + 1];
+    if (!next) return;
+    const m = info(next);
+    if (m?.online) videos.prime(m, next.in);
   }
 
   function play() {
-    if (!cut?.clips.length) return;
-    mode = 'program';
-    playing = true;
+    if (!clips().length) return;
     if (playhead >= total() - 0.05) playhead = 0;
-    seek(playhead, true);
+    playing = true;
+    startAt(playhead, true);
     paintMode();
   }
 
   function stop() {
     playing = false;
-    video.pause();
+    for (const el of [videos.active(), videos.primed()?.el]) el?.pause();
+    music.pause();
+    videos.setMix(null);
     paintMode();
   }
 
+  function seek(t) { startAt(t, false); paintTitle(); }
+
   function tick() {
-    if (mode !== 'program' || at < 0 || !cut?.clips[at]) return;
-    const c = cut.clips[at];
-    const start = cut.clips.slice(0, at).reduce((t, x) => t + len(x), 0);
-    playhead = start + Math.max(0, Math.min(len(c), video.currentTime - c.in));
-    if (playing && video.currentTime >= c.out - 0.02) {
-      if (at + 1 < cut.clips.length) load(at + 1, 0, true);
-      else { playhead = total(); stop(); }
+    requestAnimationFrame(tick);
+    if (!playing || mode !== 'program' || at < 0) return;
+    const cs = clips(), s = starts(), c = cs[at];
+    if (!c) return stop();
+    const el = videos.active();
+    playhead = s[at] + (el.currentTime - c.in) / speedOf(c);
+    const next = cs[at + 1], primed = videos.primed();
+    if (next && primed && next.trans && playhead >= s[at + 1]) {
+      // Inside a transition: both play, blended by the shader.
+      const amt = Math.min(1, (playhead - s[at + 1]) / next.trans.dur);
+      if (primed.el.paused) { setRate(primed.el, next); primed.el.play().catch(() => {}); }
+      const g = db(cut.clipGain);
+      el.volume = g * (1 - amt);
+      primed.el.volume = g * amt;
+      videos.setMix(primed.el, amt, next.trans.type === 'dip', info(next)?.log);
+    }
+    if (el.currentTime >= c.out - 0.03 || el.ended) {
+      if (next && primed && primed.el.readyState >= 2) {
+        if (primed.el.paused) { setRate(primed.el, next); primed.el.play().catch(() => {}); }
+        primed.el.volume = db(cut.clipGain);
+        videos.swap();
+        at += 1;
+        primeNext();
+      } else if (next) {
+        startAt(s[at + 1], true);         // not ready in time: load it directly
+      } else {
+        playhead = total();
+        stop();
+      }
     }
     paintHead();
+    paintTitle();
+    musicLevel();
   }
-  video.addEventListener('timeupdate', tick);
-  (function frame() { if (playing) tick(); requestAnimationFrame(frame); })();
-  video.addEventListener('pause', () => { if (mode === 'program' && playing && video.currentTime < (cut?.clips[at]?.out ?? 0) - 0.05) { playing = false; paintMode(); } });
+  requestAnimationFrame(tick);
+
+  function startMusic() {
+    const m = cut?.music;
+    if (!m) { music.pause(); return; }
+    const src = `/music/${encodeURIComponent(m.file)}`;
+    if (!music.src.endsWith(src)) music.src = src;
+    const go = () => { music.currentTime = m.start + playhead; musicLevel(); music.play().catch(() => {}); };
+    if (music.readyState >= 1) go(); else music.addEventListener('loadedmetadata', go, { once: true });
+  }
+
+  function musicLevel() {
+    const m = cut?.music;
+    if (!m) return;
+    const fade = Math.max(0.01, Math.min(m.fade, total() / 2));
+    const env = Math.max(0, Math.min(1, playhead / fade, (total() - playhead) / fade));
+    music.volume = db(m.gain) * env;
+  }
+
+  function paintTitle() {
+    const t = (cut?.titles || []).find(x => playhead >= x.at && playhead <= x.at + x.dur);
+    overlay.hidden = !t || mode !== 'program';
+    if (!t) return;
+    const fade = Math.min(0.3, t.dur / 3);
+    overlay.className = `cut-overlay ${t.style}`;
+    overlay.innerHTML = t.style === 'lower' ? '<span></span>' : '';
+    (overlay.querySelector('span') || overlay).textContent = t.text;
+    overlay.style.opacity = Math.max(0, Math.min(1, (playhead - t.at) / fade, (t.at + t.dur - playhead) / fade));
+  }
 
   // --- drawing ----------------------------------------------------------------------
 
-  const pps = () => {
-    const width = track.clientWidth - 24;
-    return Math.max(4, width / Math.max(total(), 10));
-  };
+  let zoom = 1;
+  const pps = () => Math.max(4, (track.clientWidth - 24) / Math.max(total(), 10)) * zoom;
 
   function paint() {
     $('#cutName').textContent = cut ? cut.name : 'No cut yet';
-    $('#cutStats').textContent = cut ? `${cut.clips.length} clip${cut.clips.length === 1 ? '' : 's'} · ${clock(total())}` : '';
+    $('#cutStats').textContent = cut ? `${clips().length} clip${clips().length === 1 ? '' : 's'} · ${clock(total())}` : '';
     $('#cutLog').setAttribute('aria-pressed', !!cut?.log709);
-    $('#cutLog').disabled = $('#cutExport').disabled = !cut;
-    const scale = pps();
-    const ruler = $('#cutRuler'), step = [1, 2, 5, 10, 15, 30, 60, 120, 300].find(s => s * scale >= 70) || 600;
+    for (const b of ['#cutLog', '#cutExport', '#cutTitleBtn', '#cutMusicBtn', '#cutRename']) $(b).disabled = !cut;
+    const scale = pps(), s = starts(), width = Math.max(total(), 10) * scale + 40;
+    $('#cutLanes').style.width = `${width}px`;
+    const step = [1, 2, 5, 10, 15, 30, 60, 120, 300].find(x => x * scale >= 70) || 600;
     let ticks = '';
     for (let t = 0; t <= Math.max(total(), 10); t += step) ticks += `<span style="left:${t * scale}px">${clock(t)}</span>`;
-    ruler.innerHTML = ticks;
-    const blocks = $('#cutBlocks');
-    blocks.innerHTML = '';
-    if (!cut?.clips.length) {
-      blocks.innerHTML = `<p class="cut-empty">${cut ? 'Choose a clip above, mark in (I) and out (O), then press E to add it here.' : 'Make a cut with + New cut, then add clips with E.'}</p>`;
-    }
-    (cut?.clips || []).forEach((c, i) => {
+    $('#cutRuler').innerHTML = ticks;
+
+    const lane = $('#cutBlocks');
+    lane.innerHTML = clips().length ? '' : `<p class="cut-empty">${cut ? 'Choose a clip above, mark in (I) and out (O), then press E to add it here.' : 'Make a cut with + New cut, then add clips with E.'}</p>`;
+    clips().forEach((c, i) => {
       const b = document.createElement('div');
-      b.className = 'cut-clip' + (i === selected ? ' sel' : '');
-      b.style.width = `${Math.max(6, len(c) * scale - 2)}px`;
+      b.className = 'cut-clip' + (sel.kind === 'clip' && sel.i === i ? ' sel' : '') + (c.speed ? ' slow' : '');
+      Object.assign(b.style, { left: `${s[i] * scale}px`, width: `${Math.max(6, len(c) * scale - 2)}px`,
+        backgroundImage: `url("/clipposter/${encodeURIComponent(c.shoot)}/${c.key}.jpg")` });
       b.draggable = true;
-      b.dataset.i = i;
-      b.style.backgroundImage = `url("/clipposter/${encodeURIComponent(c.shoot)}/${c.key}.jpg")`;
-      b.innerHTML = `<span class="nm">${c.key}</span><span class="du">${len(c).toFixed(1)}s</span>
-        <i class="trim l" title="Drag to trim the start"></i><i class="trim r" title="Drag to trim the end"></i>`;
+      b.innerHTML = `<span class="nm">${c.key}${c.speed ? ` · ×${(1 / c.speed).toFixed(1)} slow` : ''}</span>
+        <span class="du">${len(c).toFixed(1)}s</span><i class="trim l"></i><i class="trim r"></i>`;
       b.addEventListener('click', e => {
         if (e.target.classList.contains('trim')) return;
-        selected = i;
-        mode = 'program';
-        const start = cut.clips.slice(0, i).reduce((t, x) => t + len(x), 0);
-        const x = e.offsetX / scale;
-        seek(start + Math.min(len(c), Math.max(0, x)), false);
+        sel = { kind: 'clip', i };
+        seek(s[i] + Math.max(0, Math.min(len(c), e.offsetX / scale)));
         paint();
       });
       b.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', String(i)); b.classList.add('dragging'); });
@@ -244,13 +369,45 @@ export function createCut(app, videos) {
         e.preventDefault();
         const from = +e.dataTransfer.getData('text/plain');
         if (Number.isNaN(from) || from === i) return;
-        change(cs => { const [m] = cs.splice(from, 1); cs.splice(i, 0, m); });
-        selected = i;
+        change(k => { const [m] = k.clips.splice(from, 1); k.clips.splice(i, 0, m); if (k.clips[0]) delete k.clips[0].trans; });
+        sel = { kind: 'clip', i };
         paint();
       });
       for (const side of ['l', 'r']) b.querySelector(`.trim.${side}`).addEventListener('mousedown', e => trimDrag(e, i, side, scale));
-      blocks.appendChild(b);
+      lane.appendChild(b);
+      if (i > 0) {
+        const t = document.createElement('button');
+        t.className = 'cut-join' + (c.trans ? ` ${c.trans.type}` : '');
+        t.title = c.trans ? `${c.trans.type === 'dip' ? 'Dip to black' : 'Crossfade'} ${c.trans.dur}s · click to change, ⇧-click for longer` : 'Cut · click for a crossfade';
+        t.textContent = c.trans ? (c.trans.type === 'dip' ? '▼' : '⨯') : '+';
+        const w = c.trans ? c.trans.dur * scale : 0;
+        t.style.left = `${s[i] * scale + w / 2 - 9}px`;
+        t.addEventListener('click', e => { e.stopPropagation(); cycleTransition(i, e.shiftKey); });
+        lane.appendChild(t);
+      }
     });
+
+    const titles = $('#cutTitles');
+    titles.innerHTML = '';
+    (cut?.titles || []).forEach((t, i) => {
+      const b = document.createElement('div');
+      b.className = 'cut-tblock' + (sel.kind === 'title' && sel.i === i ? ' sel' : '');
+      Object.assign(b.style, { left: `${t.at * scale}px`, width: `${Math.max(16, t.dur * scale - 2)}px` });
+      b.innerHTML = `<span></span><i class="trim r"></i>`;
+      b.querySelector('span').textContent = `${t.style === 'lower' ? '▁ ' : 'T '}${t.text}`;
+      b.title = 'Drag to move · double-click to edit · ⌫ deletes';
+      b.addEventListener('mousedown', e => titleDrag(e, i, scale, e.target.classList.contains('trim')));
+      b.addEventListener('dblclick', () => {
+        const text = prompt('Title text (empty removes it):', t.text);
+        if (text === null) return;
+        change(k => { if (text.trim()) k.titles[i].text = text.trim(); else k.titles.splice(i, 1); });
+      });
+      titles.appendChild(b);
+    });
+
+    const m = cut?.music;
+    $('#cutMusicLane').innerHTML = m ? `<div class="cut-mblock" style="width:${total() * scale}px"></div>` : '';
+    if (m) $('#cutMusicLane .cut-mblock').textContent = `♪ ${m.file} · ${m.gain} dB`;
     paintHead();
     paintMode();
   }
@@ -259,9 +416,9 @@ export function createCut(app, videos) {
     e.preventDefault();
     e.stopPropagation();
     const c = cut.clips[i], m = info(c), max = m?.duration ?? c.out + 600, x0 = e.clientX;
-    const before = JSON.stringify(cut.clips), orig = { ...c };
+    const before = snapshot(), orig = { ...c }, sp = speedOf(c);
     const move = ev => {
-      const dt = (ev.clientX - x0) / scale;
+      const dt = (ev.clientX - x0) / scale * sp;
       if (side === 'l') c.in = +Math.max(0, Math.min(orig.out - 0.1, orig.in + dt)).toFixed(3);
       else c.out = +Math.min(max, Math.max(orig.in + 0.1, orig.out + dt)).toFixed(3);
       paint();
@@ -269,7 +426,27 @@ export function createCut(app, videos) {
     const up = () => {
       removeEventListener('mousemove', move);
       removeEventListener('mouseup', up);
-      if (JSON.stringify(cut.clips) !== before) { history.push(before); future = []; save(); }
+      if (snapshot() !== before) { history.push(before); future = []; save(); }
+    };
+    addEventListener('mousemove', move);
+    addEventListener('mouseup', up);
+  }
+
+  function titleDrag(e, i, scale, resize) {
+    e.preventDefault();
+    sel = { kind: 'title', i };
+    const t = cut.titles[i], x0 = e.clientX, orig = { ...t }, before = snapshot();
+    const move = ev => {
+      const dt = (ev.clientX - x0) / scale;
+      if (resize) t.dur = +Math.max(0.5, orig.dur + dt).toFixed(2);
+      else t.at = +Math.max(0, Math.min(Math.max(0, total() - 0.5), orig.at + dt)).toFixed(2);
+      paint();
+    };
+    const up = () => {
+      removeEventListener('mousemove', move);
+      removeEventListener('mouseup', up);
+      if (snapshot() !== before) { history.push(before); future = []; save(); }
+      else { seek(t.at); paint(); }
     };
     addEventListener('mousemove', move);
     addEventListener('mouseup', up);
@@ -284,33 +461,82 @@ export function createCut(app, videos) {
     $('#cutMode').textContent = mode === 'program' ? 'Timeline' : 'Source';
     $('#cutMode').className = `cut-mode ${mode}`;
     $('#cutPlay').textContent = playing ? '❚❚' : '▶';
+    if (mode !== 'program') overlay.hidden = true;
   }
 
   function paintMarks() {
     const src = videos.current();
-    $('#cutMarks').textContent = src
+    $('#cutMarks').textContent = src && mode === 'source'
       ? `${src.key} · in ${marks.in == null ? '—' : clock(marks.in)} · out ${marks.out == null ? '—' : clock(marks.out)} · E adds it`
-      : 'Choose a clip to add';
+      : mode === 'program' ? 'B split · C transition · M slow motion · T title · ⌫ delete' : 'Choose a clip to add';
   }
+
+  // --- music ------------------------------------------------------------------------
+
+  async function musicDialog() {
+    if (!cut) return;
+    const files = (await (await fetch('/api/music')).json()).music;
+    const m = cut.music || { file: '', start: 0, gain: -12, fade: 1.5 };
+    $('#musicFile').innerHTML = '<option value="">No music</option>' + files.map(f => `<option>${f}</option>`).join('');
+    $('#musicFile').value = m.file;
+    $('#musicStart').value = m.start;
+    $('#musicGain').value = m.gain;
+    $('#musicFade').value = m.fade;
+    $('#clipGain').value = cut.clipGain || 0;
+    $('#musicNow').textContent = '';
+    paintLevels();
+    $('#cutMusicDlg').showModal();
+  }
+  function paintLevels() {
+    $('#musicGainV').textContent = `${$('#musicGain').value} dB`;
+    $('#clipGainV').textContent = `${$('#clipGain').value} dB`;
+  }
+  for (const id of ['#musicGain', '#clipGain']) $(id).addEventListener('input', paintLevels);
+  $('#musicUpload').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    $('#musicNow').textContent = `uploading ${file.name}…`;
+    try {
+      const r = await fetch(`/api/music/upload?name=${encodeURIComponent(file.name)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+      const res = await r.json();
+      if (!r.ok) throw new Error(res.error || r.status);
+      $('#musicFile').innerHTML = '<option value="">No music</option>' + res.music.map(f => `<option>${f}</option>`).join('');
+      $('#musicFile').value = res.file;
+      $('#musicNow').textContent = `added ${res.file}`;
+    } catch (err) {
+      $('#musicNow').textContent = `upload failed: ${err.message}`;
+    }
+  });
+  $('#musicSave').addEventListener('click', () => {
+    const file = $('#musicFile').value;
+    change(k => {
+      if (file) k.music = { file, start: Math.max(0, +$('#musicStart').value || 0), gain: +$('#musicGain').value, fade: Math.max(0, +$('#musicFade').value || 0) };
+      else delete k.music;
+      const g = +$('#clipGain').value;
+      if (g) k.clipGain = g; else delete k.clipGain;
+    });
+    $('#cutMusicDlg').close();
+  });
+  $('#musicClose').addEventListener('click', () => $('#cutMusicDlg').close());
 
   // --- export -------------------------------------------------------------------------
 
-  async function exportCut() {
-    if (!cut?.clips.length) return app.status('add clips before exporting', 2500);
-    const dlg = $('#cutExportDlg');
+  function exportCut() {
+    if (!clips().length) return app.status('add clips before exporting', 2500);
     $('#cutExportName').textContent = cut.name;
     $('#cutExportNow').textContent = '';
     $('#cutExportBar').value = 0;
     $('#cutExportReveal').hidden = true;
     $('#cutExportGo').disabled = false;
-    dlg.showModal();
+    $('#cutExportDlg').showModal();
   }
 
   $('#cutExportGo').addEventListener('click', async () => {
     $('#cutExportGo').disabled = true;
     try {
       clearTimeout(saveTimer);
-      await app.post('/api/cut/save', { slug, cut: { name: cut.name, clips: cut.clips, log709: cut.log709 } });
+      await app.post('/api/cut/save', { slug, cut: body() });
       await app.post('/api/cut/export', { slug, size: $('#cutExportSize').value, codec: $('#cutExportCodec').value });
       let st;
       do {
@@ -347,16 +573,26 @@ export function createCut(app, videos) {
   });
   $('#cutLog').addEventListener('click', e => { e.currentTarget.blur(); if (cut) { cut.log709 = !cut.log709; paint(); save(); } });
   $('#cutExport').addEventListener('click', e => { e.currentTarget.blur(); exportCut(); });
+  $('#cutTitleBtn').addEventListener('click', e => { e.currentTarget.blur(); addTitle(); });
+  $('#cutMusicBtn').addEventListener('click', e => { e.currentTarget.blur(); musicDialog(); });
+  $('#cutMusicLane').addEventListener('click', () => musicDialog());
   $('#cutPlay').addEventListener('click', e => { e.currentTarget.blur(); playing ? stop() : play(); });
+  $('#cutZoomIn').addEventListener('click', e => { e.currentTarget.blur(); zoom = Math.min(16, zoom * 1.5); paint(); });
+  $('#cutZoomOut').addEventListener('click', e => { e.currentTarget.blur(); zoom = Math.max(1, zoom / 1.5); paint(); });
   $('#cutTrackArea').addEventListener('click', e => {
-    if (e.target.closest('.cut-clip') || !cut?.clips.length) return;
-    mode = 'program';
-    selected = -1;
-    seek((e.clientX - $('#cutBlocks').getBoundingClientRect().left) / pps(), false);
+    if (e.target.closest('.cut-clip, .cut-tblock, .cut-join, .cut-mblock') || !clips().length) return;
+    sel = { kind: null, i: -1 };
+    seek((e.clientX - $('#cutLanes').getBoundingClientRect().left) / pps());
     paint();
   });
   new ResizeObserver(() => paint()).observe(track);
-  videos.onFocus(() => { if (mode === 'program') stop(); mode = 'source'; marks = { in: null, out: null }; paintMarks(); paintMode(); });
+  videos.onFocus(() => {
+    if (mode === 'program') { stop(); videos.program(false); }
+    mode = 'source';
+    marks = { in: null, out: null };
+    paintMarks();
+    paintMode();
+  });
 
   return {
     async show() {
@@ -368,27 +604,27 @@ export function createCut(app, videos) {
       else paint();
       paintMarks();
     },
+    hide() { stop(); },
     // Keys the Cut workspace takes before the bin's own (videos.js).
     onKey(e) {
       const k = e.key.toLowerCase();
       if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); undo(e.shiftKey); return true; }
       if (e.metaKey || e.ctrlKey || e.altKey) return false;
-      if (k === ' ') { e.preventDefault(); if (mode === 'program') { playing ? stop() : play(); } else videos.toggle(); return true; }
-      if (k === 'i' || k === 'o') {
-        e.preventDefault();
-        if (mode !== 'source' || !videos.current()) return true;
-        marks[k === 'i' ? 'in' : 'out'] = video.currentTime;
+      const take = fn => { e.preventDefault(); fn(); return true; };
+      if (k === ' ') return take(() => (mode === 'program' ? (playing ? stop() : play()) : videos.toggle()));
+      if (k === 'i' || k === 'o') return take(() => {
+        if (mode !== 'source' || !videos.current()) return;
+        marks[k === 'i' ? 'in' : 'out'] = videos.active().currentTime;
         paintMarks();
-        return true;
-      }
-      if (k === 'e') { e.preventDefault(); append(); return true; }
-      if (k === 'b') { e.preventDefault(); split(); return true; }
-      if ((k === 'backspace' || k === 'delete') && mode === 'program') { e.preventDefault(); remove(); return true; }
-      if (mode === 'program' && (k === 'arrowleft' || k === 'arrowright')) {
-        e.preventDefault();
-        seek(playhead + (k === 'arrowright' ? 1 : -1) * (e.shiftKey ? 1 : 1 / 24), false);
-        return true;
-      }
+      });
+      if (k === 'e') return take(append);
+      if (k === 't') return take(addTitle);
+      if (mode !== 'program') return false;
+      if (k === 'b') return take(split);
+      if (k === 'c') return take(() => cycleTransition(sel.kind === 'clip' ? sel.i : locate(playhead)?.i, e.shiftKey));
+      if (k === 'm') return take(() => toggleSlow(sel.kind === 'clip' ? sel.i : locate(playhead)?.i));
+      if (k === 'backspace' || k === 'delete') return take(remove);
+      if (k === 'arrowleft' || k === 'arrowright') return take(() => seek(playhead + (k === 'arrowright' ? 1 : -1) * (e.shiftKey ? 1 : 1 / fpsOut())));
       return false;
     },
   };

@@ -158,7 +158,7 @@ export const app = {
     $('#post').hidden = tab !== 'post';
     $('#videos').hidden = tab !== 'videos';
     $('#collections').hidden = tab !== 'collections';
-    if (tab !== 'videos') videos.hide();
+    if (tab !== 'videos') { videos.hide(); cut.hide(); }
     paintNav();
     if (tab === 'post') {
       post.show();
