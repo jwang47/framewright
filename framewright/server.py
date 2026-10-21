@@ -65,6 +65,7 @@ Stdlib only, no venv needed.
 from __future__ import annotations
 
 import argparse
+import glob
 import hashlib
 import json
 import struct
@@ -962,6 +963,16 @@ def thumb(src: Path, shoot_dir: Path) -> Path:
         return out
 
 
+EDIT_HASH = re.compile(r"^[0-9a-z]{1,16}$")
+
+
+def edited_thumb(shoot_dir: Path, key: str, edit_hash: str) -> Path | None:
+    """Where the page's render of an edited frame's tile is kept, or None."""
+    if not EDIT_HASH.match(edit_hash or ""):
+        return None
+    return shoot_dir / PREVIEW_DIR / "edited" / f"{key}.{edit_hash}.jpg"
+
+
 def warm_previews(root: Path, shoot: str) -> None:
     """Render a shoot's thumbnails and previews in the background.
 
@@ -1246,7 +1257,7 @@ class Handler(BaseHTTPRequestHandler):
             expected = {
                 "/api/luts/install": "application/octet-stream",
                 "/api/music/upload": "application/octet-stream",
-                "/api/export": "image/jpeg", "/api/post-export": "image/jpeg",
+                "/api/export": "image/jpeg", "/api/post-export": "image/jpeg", "/api/editthumb": "image/jpeg",
                 "/headless/result": "image/jpeg", "/headless/error": "text/plain",
             }.get(path, "application/json" if path.startswith("/api/") else None)
             types = self.headers.get_all("Content-Type", [])
@@ -1260,6 +1271,7 @@ class Handler(BaseHTTPRequestHandler):
     setup_token = uuid.uuid4().hex
     warmed: set[str] = set()
     warmed_clips: set[str] = set()
+    warmed_all = False
 
     def log_message(self, fmt: str, *args) -> None:  # quiet
         pass
@@ -1391,8 +1403,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.api_collection_frames(query["collection"][0])
             elif "all" in query:
                 # The whole library, newest day first; thumbnails render as the grid asks.
-                frames = [f for shoot in list_shoots(self.root) for f in self.shoot_frames(shoot, warm=False)]
+                shoots = list_shoots(self.root)
+                frames = [f for shoot in shoots for f in self.shoot_frames(shoot, warm=False)]
                 self.send_json({"name": "Library", "frames": frames})
+                if not Handler.warmed_all:
+                    # Once per launch: missing tiles and posters, newest day first,
+                    # one at a time so the grid's own requests stay quick.
+                    Handler.warmed_all = True
+                    def warm_all(root=self.root, shoots=shoots):
+                        for shoot in shoots:
+                            warm_previews(root, shoot)
+                            clips.warm_posters(root / shoot)
+                    threading.Thread(target=warm_all, daemon=True).start()
             else:
                 self.api_frames(query.get("shoot", [""])[0])
             return
@@ -1553,6 +1575,17 @@ class Handler(BaseHTTPRequestHandler):
 
         if parts == ["api", "clips"]:
             self.api_clips(query.get("shoot", [""])[0])
+            return
+
+        if len(parts) == 3 and parts[0] == "editthumb":
+            # A grid tile of an edited frame, rendered once by the page and
+            # kept under its edit's hash, so it needn't be rendered again.
+            found = self.frame(parts[1], parts[2].removesuffix(".jpg"))
+            path = edited_thumb(found[0], frame_key(found[1]), query.get("h", [""])[0]) if found else None
+            if path is None or not path.is_file():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self.send_bytes(path.read_bytes(), "image/jpeg", "max-age=86400")
             return
 
         if len(parts) == 3 and parts[0] in ("clip", "clipposter"):
@@ -1938,6 +1971,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             elif url.path == "/api/eject":
                 self.api_eject()
+            elif url.path == "/api/editthumb":
+                query = parse_qs(url.query)
+                found = self.frame(query.get("shoot", [""])[0], query.get("key", [""])[0])
+                path = edited_thumb(found[0], frame_key(found[1]), query.get("h", [""])[0]) if found else None
+                if path is None:
+                    self.send_json({"error": "no such frame"}, HTTPStatus.NOT_FOUND)
+                    return
+                data = self.read_body()
+                if not data.startswith(b"\xff\xd8") or len(data) > 8 * 1024 * 1024:
+                    raise ValueError("expected a JPEG under 8 MB")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                for old in path.parent.glob(f"{glob.escape(path.name.split('.')[0])}.*.jpg"):
+                    old.unlink(missing_ok=True)      # tiles of earlier versions of the edit
+                tmp = path.with_suffix(".part")
+                tmp.write_bytes(data)
+                tmp.replace(path)
+                self.send_json({"ok": True})
             elif url.path == "/api/music/upload":
                 self.api_music_upload(parse_qs(url.query).get("name", [""])[0])
             elif url.path == "/api/cut/save":

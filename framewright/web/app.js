@@ -468,13 +468,16 @@ const library = {
     list.innerHTML = '';
     this.observer?.disconnect();
     // Edited thumbnails render through the shader only once they scroll into view.
+    thumbs.visible.clear();
     this.observer = new IntersectionObserver(entries => {
-      for (const e of entries) if (e.isIntersecting) {
-        this.observer.unobserve(e.target);
-        const f = app.frame(e.target.dataset.id);
+      for (const e of entries) {
+        const id = e.target.dataset.id;
+        if (!e.isIntersecting) { thumbs.visible.delete(id); continue; }
+        thumbs.visible.add(id);
+        const f = app.frame(id);
         if (f?.params) thumbs.apply(f);
       }
-    }, { rootMargin: '400px' });
+    }, { rootMargin: '300px' });
     const frames = this.shown();
     const lib = app.view?.kind === 'library';
     $('#zoomLevel').hidden = !lib;
@@ -743,8 +746,16 @@ const library = {
 // frame is redrawn whenever its edit is saved.
 const thumbs = {
   renderer: null, canvas: null, done: new Map(), queue: [], busy: false,
+  visible: new Set(),     // grid tiles on screen now, kept by the library's observer
 
   key(f) { return JSON.stringify(f.params); },
+
+  // A short stable hash of the edit, naming its cached tile on the server.
+  hash(f) {
+    let h = 5381;
+    for (const ch of this.key(f)) h = ((h << 5) + h + ch.charCodeAt(0)) >>> 0;
+    return h.toString(36);
+  },
 
   show(f, url) {
     for (const img of document.querySelectorAll('img[data-thumb]')) {
@@ -758,23 +769,42 @@ const thumbs = {
       if (old) { URL.revokeObjectURL(old.url); this.done.delete(f.id); }
       return this.show(f, app.src('thumb', f));
     }
-    const hit = this.done.get(f.id);
-    if (hit && hit.key === this.key(f)) return this.show(f, hit.url);
-    if (!this.queue.includes(f)) this.queue.push(f);
-    this.pump();
+    const hit = this.done.get(f.id), key = this.key(f);
+    if (hit && hit.key === key) return hit.url && this.show(f, hit.url);
+    if (hit?.pending === key || this.queue.includes(f)) return;
+    // Rendered before? The server keeps it under the edit's hash.
+    this.done.set(f.id, { key: null, pending: key });
+    const url = `/editthumb/${encodeURIComponent(f.shoot)}/${f.key}.jpg?h=${this.hash(f)}`;
+    const probe = new Image();
+    probe.onload = () => { this.done.set(f.id, { key, url, cached: true }); this.show(f, url); };
+    probe.onerror = () => { this.done.delete(f.id); this.queue.push(f); this.pump(); };
+    probe.src = url;
+  },
+
+  // The next frame to render: the newest one on screen, else the newest of
+  // the rest (they fill the server cache for later), so a fast scroll never
+  // waits behind tiles it has already passed.
+  next() {
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      if (this.visible.has(this.queue[i].id) || this.queue[i].id === app.focusKey) return this.queue.splice(i, 1)[0];
+    }
+    return this.queue.pop();
   },
 
   async pump() {
     if (this.busy) return;
     this.busy = true;
     while (this.queue.length) {
-      const f = this.queue.shift(), key = this.key(f);
+      const f = this.next(), key = this.key(f), hash = this.hash(f);
       try {
-        const url = await this.render(f);
+        const blob = await this.render(f);
+        const url = URL.createObjectURL(blob);
         const old = this.done.get(f.id);
-        if (old) URL.revokeObjectURL(old.url);
+        if (old?.url && !old.cached) URL.revokeObjectURL(old.url);
         this.done.set(f.id, { key, url });
         this.show(f, url);
+        fetch(`/api/editthumb?shoot=${encodeURIComponent(f.shoot)}&key=${encodeURIComponent(f.key)}&h=${hash}`,
+          { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob }).catch(() => {});
       } catch { /* keep the camera thumbnail */ }
       await new Promise(r => setTimeout(r));   // let the page breathe between frames
     }
@@ -794,8 +824,7 @@ const thumbs = {
     release(img);
     await lutsReady(f.params);
     this.renderer.render(f.params, { maxSize: 480 });
-    const blob = await new Promise(r => this.canvas.toBlob(r, 'image/jpeg', 0.85));
-    return URL.createObjectURL(blob);
+    return new Promise(r => this.canvas.toBlob(r, 'image/jpeg', 0.85));
   },
 };
 app.thumbs = thumbs;
