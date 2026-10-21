@@ -15,5 +15,12 @@ files to the Trash, from the Marked for deletion filter.
 Keep a key's meaning the same across tabs (pick is never something else
 somewhere), and update the shortcut lists in `web/index.html` with any change.
 
+## What's new
+
+Every user-visible change adds an entry at the top of
+`framewright/web/changes.json`: the next `id` and a `text` of a few words
+(e.g. "Draggable dividers"), no sentences. After an update the app shows a
+toast naming the entries that window hasn't seen yet.
+
 AGENTS.md and CLAUDE.md must stay in sync: when you change guidance in one,
 make the same change in the other.

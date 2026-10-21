@@ -2216,7 +2216,33 @@ function renderCollections() {
 
 $('#newCol2').addEventListener('click', e => { e.currentTarget.blur(); newCollection(); });
 
+// --- what's new ---------------------------------------------------------------------
+//
+// web/changes.json lists user-visible changes, newest first, a few words each.
+// After an update, a toast names the ones this window hasn't shown yet.
+
+async function whatsNew() {
+  let changes;
+  try { changes = await (await fetch('/changes.json', { cache: 'no-store' })).json(); } catch { return; }
+  if (!changes.length) return;
+  const seen = +stored('studio.seenChange', 0), latest = changes[0].id;
+  store('studio.seenChange', latest);
+  if (!seen || latest <= seen) return;          // first run: nothing to announce
+  const fresh = changes.filter(c => c.id > seen).map(c => c.text);
+  const shown = fresh.slice(0, 3).join(' · ') + (fresh.length > 3 ? ` · +${fresh.length - 3} more` : '');
+  const toast = document.createElement('button');
+  toast.className = 'toast';
+  toast.title = fresh.join('\n');
+  toast.innerHTML = '<strong>Updated</strong> <span></span>';
+  toast.querySelector('span').textContent = shown;
+  toast.addEventListener('click', () => toast.remove());
+  document.body.appendChild(toast);
+  setTimeout(() => toast.classList.add('out'), 7000);
+  setTimeout(() => toast.remove(), 7600);
+}
+
 async function start() {
+  whatsNew();
   const q = new URLSearchParams(location.search);
   let want = q.get('view') || (q.get('shoot') ? `shoot:${q.get('shoot')}` : 'library:all');
   if (want?.startsWith('trip:')) want = 'collection:' + want.slice(5);

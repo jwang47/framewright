@@ -821,3 +821,10 @@ main.grid > figure { content-visibility: auto; contain-intrinsic-size: auto 100p
 #list figure.chosen .frame { background: var(--focus); }
 #list figure.chosen .sel { left: 26px; }
 #list figure.chosen.rejected .frame::after { content: '✓'; color: #0E0E0D; inset: auto; top: 4px; left: 4px; font-size: 11px; display: block; }
+
+.toast { position: fixed; right: 20px; bottom: 20px; z-index: 60; max-width: min(520px, calc(100vw - 40px));
+  display: flex; gap: 8px; align-items: baseline; padding: 10px 14px; border-radius: 10px; text-align: left;
+  background: var(--panel); border: 1px solid var(--line2); box-shadow: 0 6px 24px rgba(0,0,0,.45);
+  color: var(--soft); font-size: 12px; transition: opacity .5s, transform .5s; }
+.toast strong { color: var(--pick); font-weight: 600; white-space: nowrap; }
+.toast.out { opacity: 0; transform: translateY(6px); }
