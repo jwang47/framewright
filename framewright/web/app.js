@@ -868,7 +868,8 @@ const loupe = {
       this.draw();
       $('#loupeZoomStatus').hidden = true;
       if (this.zoom > 1 || this.edges) this.loadFull();
-      const ids = library.visible();
+      // Neighbouring photos only: clips in the grid have nothing to prefetch.
+      const ids = library.visible().filter(i => app.frame(i));
       prefetch(app, ids.map(i => app.frame(i)), ids.indexOf(id), () => app.focusKey);
     } catch (e) {
       rawFailed = true;

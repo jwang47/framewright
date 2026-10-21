@@ -91,7 +91,6 @@ figure.picked .star { background: var(--pick); color: #111; }
 .frame .sel { position: absolute; top: 4px; left: 4px; min-width: 22px; height: 22px; padding: 0 6px;
   border-radius: 11px; background: var(--post); color: #fff; font-size: 12px; font-weight: 700;
   line-height: 22px; text-align: center; }
-figure:has(.sel:not([hidden])) .frame { box-shadow: 0 0 0 2px var(--post); }
 .day { grid-column: 1 / -1; margin: 14px 0 2px; font-size: 14px; font-weight: 600; }
 .day:first-child { margin-top: 0; }
 .day span { color: var(--muted); font-weight: 400; font-size: 11px; margin-left: 6px; }
@@ -739,10 +738,22 @@ figure.picked .star, figure.focus .star { opacity: 0; }
 .frame:hover .star { opacity: 1; }
 .frame .sel { top: 3px; left: 3px; min-width: 14px; height: 14px; padding: 0 4px; border-radius: 7px;
   font-size: 9px; line-height: 14px; font-weight: 700; }
-figure:has(.sel:not([hidden])) .frame { box-shadow: none; }
 .frame .dur, .frame .hfr { bottom: 5px; font-size: 9px; line-height: 13px; padding: 0 4px; }
 .frame .dur { right: 3px; }
 .frame.clip .hfr { right: auto; left: 3px; }
 .frame.clip .where { display: none; }
 main.small .frame .dur, main.small .frame .hfr { display: none; }
 main.small .frame .sel { min-width: 8px; width: 8px; height: 8px; padding: 0; font-size: 0; }
+
+.vid-stage video.standby { display: none; }
+.cut-overlay { position: absolute; left: 0; right: 0; pointer-events: none; text-align: center; color: #fff;
+  font-weight: 700; transition: opacity .25s; z-index: 3; padding: 0 6%; }
+.cut-overlay.center { top: 50%; transform: translateY(-50%); font-size: clamp(18px, 4.2vw, 56px); text-shadow: 0 2px 6px rgba(0,0,0,.5); }
+.cut-overlay.lower { bottom: 14%; font-size: clamp(12px, 2.4vw, 30px); }
+.cut-overlay.lower span { background: rgba(0,0,0,.45); padding: .3em .7em; border-radius: 4px; }
+/* A video always says so: ▶ beside its length, or just ▶ on tiny tiles. */
+.frame .dur::before { content: '▶'; font-size: 7px; margin-right: 3px; vertical-align: 1px; }
+main.small .frame .dur { display: block; font-size: 0; padding: 0 4px; }
+main.small .frame .dur::before { font-size: 7px; margin: 0; }
+/* Big grids: tiles off screen skip layout and paint. */
+main.grid > figure { content-visibility: auto; contain-intrinsic-size: auto 100px; }

@@ -8,21 +8,27 @@ const $ = s => document.querySelector(s);
 
 const VERT = `attribute vec2 p; varying vec2 uv;
 void main() { uv = vec2(p.x * .5 + .5, .5 - p.y * .5); gl_Position = vec4(p, 0., 1.); }`;
-const FRAG = `precision highp float; varying vec2 uv; uniform sampler2D tex; uniform float logView;
+const FRAG = `precision highp float; varying vec2 uv;
+uniform sampler2D texA, texB; uniform float logA, logB, amt, dip;
 vec3 decode(vec3 v) {
   vec3 code = v * 1023.;
   vec3 hi = pow(vec3(10.), (code - 420.) / 261.5) * .19 - .01;
   vec3 lo = (code - 95.) * .01125 / (171.2102946929 - 95.);
   return mix(lo, hi, step(171.2102946929, code));
 }
+vec3 look(vec3 c, float lg) {
+  if (lg < .5) return c;
+  vec3 x = max(decode(c), 0.) * 1.4;
+  c = pow(clamp(x * (1. + x / 36.) / (1. + x), 0., 1.), vec3(1. / 2.2));
+  float l = dot(c, vec3(.2126, .7152, .0722));
+  return clamp(mix(vec3(l), c, 1.25), 0., 1.);
+}
 void main() {
-  vec3 c = texture2D(tex, uv).rgb;
-  if (logView > .5) {
-    vec3 x = max(decode(c), 0.) * 1.4;
-    c = pow(clamp(x * (1. + x / 36.) / (1. + x), 0., 1.), vec3(1. / 2.2));
-    float l = dot(c, vec3(.2126, .7152, .0722));
-    c = clamp(mix(vec3(l), c, 1.25), 0., 1.);
-  }
+  vec3 a = look(texture2D(texA, uv).rgb, logA);
+  if (amt <= 0.) { gl_FragColor = vec4(a, 1.); return; }
+  vec3 b = look(texture2D(texB, uv).rgb, logB);
+  // A crossfade mixes; a dip goes through black, out of A then into B.
+  vec3 c = dip > .5 ? (amt < .5 ? a * (1. - amt * 2.) : b * (amt * 2. - 1.)) : mix(a, b, amt);
   gl_FragColor = vec4(c, 1.);
 }`;
 
@@ -45,8 +51,13 @@ const pretty = s => (s || '').replace(/-/g, ' ').replace(/\b(s )?log(\d)/i, (m, 
   .replace(/s gamut(\d)/i, 'S-Gamut$1').replace(/\bcine\b/i, 'Cine');
 
 export function createVideos(app) {
-  const video = $('#vidPlayer'), canvas = $('#vidGL');
-  let days = [], clips = [], focus = null, loaded = null, gl = null, tex = null, uLog = null;
+  // Two players: the Cut workspace primes the next clip in the spare one and
+  // swaps to it at the edit, so a cut plays without a gap. `video` is the one
+  // on screen.
+  const players = [$('#vidPlayer'), $('#vidPlayer2')], canvas = $('#vidGL');
+  let video = players[0];
+  let days = [], clips = [], focus = null, loaded = null, gl = null, tex = null, texB = null, u = {};
+  let forceGL = false, mixState = null, primed = null;
   let scope = stored('studio.videoScope', 'day'), logView = stored('studio.logView', '1') === '1';
   let token = 0, current = null, focusHook = null;
   // The player can be lent to the Library's preview pane; this is where it lives.
@@ -206,16 +217,23 @@ export function createVideos(app) {
     const p = gl.getAttribLocation(prog, 'p');
     gl.enableVertexAttribArray(p);
     gl.vertexAttribPointer(p, 2, gl.FLOAT, false, 0, 0);
-    tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
-      [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
-    uLog = gl.getUniformLocation(prog, 'logView');
+    const texture = () => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
+        [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+      return t;
+    };
+    tex = texture();
+    texB = texture();
+    for (const name of ['texA', 'texB', 'logA', 'logB', 'amt', 'dip']) u[name] = gl.getUniformLocation(prog, name);
+    gl.uniform1i(u.texA, 0);
+    gl.uniform1i(u.texB, 1);
     return true;
   }
 
   function useGL(c) {
-    const on = c.log && logView && initGL();
+    const on = (forceGL || (c.log && logView)) && initGL();
     canvas.hidden = !on;
     // The poster (already converted) shows until the shader has a frame to draw.
     video.classList.remove('under-gl');
@@ -239,21 +257,37 @@ export function createVideos(app) {
   function draw() {
     if (canvas.hidden || !gl || video.readyState < 2 || !fit()) return;
     gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.bindTexture(gl.TEXTURE_2D, tex);
     try {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, video);
+      const m = mixState && mixState.el.readyState >= 2 ? mixState : null;
+      if (m) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, texB);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, m.el);
+      }
+      gl.uniform1f(u.logA, current?.log && logView ? 1 : 0);
+      gl.uniform1f(u.logB, m?.log && logView ? 1 : 0);
+      gl.uniform1f(u.amt, m ? m.amt : 0);
+      gl.uniform1f(u.dip, m?.dip ? 1 : 0);
     } catch { return; }
-    gl.uniform1f(uLog, 1);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     video.classList.add('under-gl');
     canvas.style.visibility = '';
   }
 
+  // Redraw while either player runs (both do during a transition).
+  let looping = false;
   function loop() {
-    draw();
-    if (video.paused || video.ended) return;
-    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(loop);
-    else requestAnimationFrame(loop);
+    if (looping) return;
+    looping = true;
+    const frame = () => {
+      draw();
+      if (players.some(p => !p.paused && !p.ended)) requestAnimationFrame(frame);
+      else looping = false;
+    };
+    requestAnimationFrame(frame);
   }
 
   // --- transport --------------------------------------------------------------
@@ -281,12 +315,15 @@ export function createVideos(app) {
   }
 
   let seeking = false;
-  video.addEventListener('play', () => { paintControls(); loop(); });
-  for (const ev of ['pause', 'timeupdate', 'durationchange', 'volumechange', 'ended']) video.addEventListener(ev, paintControls);
-  for (const ev of ['loadeddata', 'seeked', 'resize']) video.addEventListener(ev, draw);
-  video.addEventListener('click', toggle);
+  // Events count only from the player on screen.
+  const on = (ev, fn) => { for (const pl of players) pl.addEventListener(ev, e => { if (e.target === video) fn(e); }); };
+  on('play', () => { paintControls(); loop(); });
+  for (const pl of players) pl.addEventListener('play', loop);
+  for (const ev of ['pause', 'timeupdate', 'durationchange', 'volumechange', 'ended']) on(ev, paintControls);
+  for (const ev of ['loadeddata', 'seeked', 'resize']) on(ev, draw);
+  on('click', toggle);
   canvas.addEventListener('click', toggle);
-  video.addEventListener('error', () => {
+  on('error', () => {
     const c = current;
     if (c?.online) app.status(`this browser can't decode ${c.codec || 'this'} video; use Open to play it in QuickTime`, 6000);
   });
@@ -396,7 +433,46 @@ export function createVideos(app) {
     step,
     // For the Cut workspace (cut.js): the source clip, and loading any clip.
     current: () => current,
-    openClip(c) { loaded = id(c); open(c); },
+    openClip(c) { loaded = id(c); primed = null; open(c); },
+    active: () => video,
+    // Program playback (cut.js): always draw through the shader, so a
+    // transition can blend the two players.
+    program(onOff) {
+      forceGL = onOff;
+      if (!onOff) { mixState = null; for (const pl of players) if (pl !== video) pl.pause(); }
+      if (current) useGL(current);
+    },
+    // Load a clip into the spare player, paused at `at` seconds.
+    prime(c, at) {
+      const spare = players.find(pl => pl !== video);
+      const src = `/clip/${encodeURIComponent(c.shoot)}/${c.key}`;
+      primed = { c, el: spare };
+      const seek = () => { spare.currentTime = at; };
+      if (!spare.src.endsWith(src)) {
+        spare.src = src;
+        spare.addEventListener('loadedmetadata', seek, { once: true });
+      } else seek();
+      spare.pause();
+      return spare;
+    },
+    primed: () => primed,
+    // Put the primed player on screen; it keeps playing if it already is.
+    swap() {
+      if (!primed) return null;
+      const old = video;
+      video = primed.el;
+      current = primed.c;
+      loaded = id(current);
+      primed = null;
+      mixState = null;
+      old.pause();
+      old.classList.add('standby');
+      video.classList.remove('standby');
+      useGL(current);
+      paintControls();
+      return video;
+    },
+    setMix(el, amount, dipping, log) { mixState = el ? { el, amt: amount, dip: dipping, log } : null; draw(); },
     onFocus(fn) { focusHook = fn; },
     pause() { video.pause(); },
     fullscreen() { $('#vidFs').click(); },

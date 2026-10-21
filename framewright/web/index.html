@@ -196,6 +196,7 @@
 <section id="videos" class="tab" role="tabpanel" hidden>
   <div class="cut-bar">
     <select id="cutPick" aria-label="Cut"></select>
+    <button id="cutNew">+ New cut</button>
     <div class="cut-title"><strong id="cutName">No cut yet</strong><span class="hint"><span id="cutStats"></span> · <span id="cutState">saved</span></span></div>
     <button id="cutRename">Rename</button>
     <span class="push-right"></span>
@@ -237,6 +238,8 @@
     <aside class="loupe">
       <div class="loupe-stage vid-stage" id="vidStage">
         <video id="vidPlayer" playsinline preload="auto"></video>
+        <video id="vidPlayer2" class="standby" playsinline preload="auto"></video>
+        <div class="cut-overlay" id="cutTitle" hidden></div>
         <canvas id="vidGL" hidden></canvas>
       </div>
       <div class="vid-controls" id="vidBar">

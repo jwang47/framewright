@@ -6,8 +6,13 @@ A cut lives at <library>/cuts/<slug>.cut.json:
      "clips": [{"shoot": "2026-10-12_sony-ilme-fx30", "key": "C0091",
                 "in": 1.25, "out": 5.0}, ...]}
 
-Phase one is a single video track whose audio follows its pictures: each clip
-plays from `in` to `out` seconds, one after another. Like photo recipes, it's
+One video track whose audio follows its pictures: each clip plays from `in`
+to `out` seconds of its file, at `speed` (0.2 plays 120p footage as 24p slow
+motion, silently), joined by a cut or by a `trans` into it ({"type": "cross"
+or "dip", "dur": seconds}). Optional: `clipGain` (dB, the clips' own sound),
+`music` ({"file" in <library>/music, "start" seconds into it, "gain" dB,
+"fade" seconds at both ends}) and `titles` ([{"text", "at", "dur", "style":
+"center" or "lower"}], in seconds of the finished cut). Like photo recipes, it's
 plain JSON so an agent can propose a cut by writing one. Export renders it
 with ffmpeg into <library>/export/cuts/<slug>.mp4, converting S-Log3 clips to
 display gamma with clips.py's viewing curve when `log709` is on.
@@ -30,6 +35,10 @@ from . import clips
 CUTS_DIR = "cuts"
 SUFFIX = ".cut.json"
 MAX_CLIPS = 500
+MAX_TITLES = 50
+MUSIC_DIR = "music"
+MUSIC_EXTS = {".mp3", ".m4a", ".aac", ".wav", ".aif", ".aiff", ".flac"}
+TRANSITIONS = ("cross", "dip")
 SAFE = re.compile(r"^[A-Za-z0-9_.-]+$")
 SIZES = {"source": None, "2160": 2160, "1080": 1080, "720": 720}
 CODECS = ("h264", "hevc")
@@ -67,8 +76,75 @@ def clean_cut(cut: object) -> dict:
             raise ValueError(f"{key}: in and out are seconds")
         if start < 0 or end <= start or end > 86400:
             raise ValueError(f"{key}: out must come after in")
-        out.append({"shoot": shoot, "key": key, "in": round(float(start), 3), "out": round(float(end), 3)})
-    return {"version": 1, "name": name.strip(), "log709": bool(cut.get("log709", True)), "clips": out}
+        clip = {"shoot": shoot, "key": key, "in": round(float(start), 3), "out": round(float(end), 3)}
+        speed = c.get("speed", 1)
+        if not isinstance(speed, (int, float)) or isinstance(speed, bool) or not 0.05 <= speed <= 4:
+            raise ValueError(f"{key}: speed runs from 0.05 to 4")
+        if speed != 1:
+            clip["speed"] = round(float(speed), 4)
+        trans = c.get("trans")
+        if trans and out:
+            if not isinstance(trans, dict) or trans.get("type") not in TRANSITIONS:
+                raise ValueError(f"{key}: a transition is cross or dip")
+            dur = trans.get("dur", 0.5)
+            longest = min(length(clip), length(out[-1])) / 2
+            if not isinstance(dur, (int, float)) or isinstance(dur, bool) or dur <= 0:
+                raise ValueError(f"{key}: a transition needs a length")
+            clip["trans"] = {"type": trans["type"], "dur": round(min(float(dur), longest), 3)}
+        out.append(clip)
+    result = {"version": 1, "name": name.strip(), "log709": bool(cut.get("log709", True)), "clips": out}
+    gain = cut.get("clipGain", 0)
+    if not isinstance(gain, (int, float)) or isinstance(gain, bool) or not -60 <= gain <= 12:
+        raise ValueError("clipGain runs from -60 to 12 dB")
+    if gain:
+        result["clipGain"] = round(float(gain), 1)
+    music = cut.get("music")
+    if music:
+        if not isinstance(music, dict) or not isinstance(music.get("file"), str) or not SAFE.match(music["file"]) \
+                or Path(music["file"]).suffix.lower() not in MUSIC_EXTS:
+            raise ValueError("music needs a file from the library's music folder")
+        nums = {k: music.get(k, d) for k, d in (("start", 0), ("gain", 0), ("fade", 1.5))}
+        if any(not isinstance(v, (int, float)) or isinstance(v, bool) for v in nums.values()) \
+                or nums["start"] < 0 or not -60 <= nums["gain"] <= 12 or not 0 <= nums["fade"] <= 30:
+            raise ValueError("music start, gain (dB) and fade are numbers in range")
+        result["music"] = {"file": music["file"], **{k: round(float(v), 3) for k, v in nums.items()}}
+    titles = cut.get("titles", [])
+    if not isinstance(titles, list) or len(titles) > MAX_TITLES:
+        raise ValueError(f"titles must be a list of at most {MAX_TITLES}")
+    clean_titles = []
+    for t in titles:
+        if not isinstance(t, dict) or not isinstance(t.get("text"), str) or not t["text"].strip() or len(t["text"]) > 200:
+            raise ValueError("each title needs text of up to 200 characters")
+        at, dur = t.get("at", 0), t.get("dur", 3)
+        if any(not isinstance(v, (int, float)) or isinstance(v, bool) for v in (at, dur)) or at < 0 or not 0.2 <= dur <= 600:
+            raise ValueError("a title's at and dur are seconds")
+        style = t.get("style", "center")
+        if style not in ("center", "lower"):
+            raise ValueError("a title's style is center or lower")
+        clean_titles.append({"text": t["text"].strip(), "at": round(float(at), 3), "dur": round(float(dur), 3), "style": style})
+    if clean_titles:
+        result["titles"] = sorted(clean_titles, key=lambda t: t["at"])
+    return result
+
+
+def length(clip: dict) -> float:
+    """Seconds a clip runs in the cut, after its speed."""
+    return (clip["out"] - clip["in"]) / clip.get("speed", 1)
+
+
+def starts(items: list[dict]) -> list[float]:
+    """Where each clip begins in the cut; a transition overlaps the clip before."""
+    out, t = [], 0.0
+    for i, c in enumerate(items):
+        if i:
+            t -= c.get("trans", {}).get("dur", 0)
+        out.append(t)
+        t += length(c)
+    return out
+
+
+def running_time(items: list[dict]) -> float:
+    return (starts(items)[-1] + length(items[-1])) if items else 0.0
 
 
 def read_cut(root: Path, slug: str) -> dict | None:
@@ -103,8 +179,12 @@ def list_cuts(root: Path) -> list[dict]:
         except (OSError, ValueError):
             continue
         items = cut.get("clips", [])
+        try:
+            duration = running_time(items)
+        except (KeyError, TypeError):
+            duration = 0.0
         out.append({"slug": path.name[:-len(SUFFIX)], "name": cut.get("name", path.stem),
-                    "clips": len(items), "duration": round(sum(c["out"] - c["in"] for c in items), 2),
+                    "clips": len(items), "duration": round(duration, 2),
                     "updated": cut.get("updated", "")})
     return sorted(out, key=lambda c: c["updated"], reverse=True)
 
@@ -137,16 +217,48 @@ def has_audio(path: Path) -> bool:
         return False
 
 
+FONTS = ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf",
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "C:/Windows/Fonts/arialbd.ttf")
+
+
+def music_files(root: Path) -> list[str]:
+    folder = root / MUSIC_DIR
+    return sorted(f.name for f in folder.iterdir() if f.suffix.lower() in MUSIC_EXTS) if folder.is_dir() else []
+
+
+def _esc(path: Path | str) -> str:
+    """A path inside an ffmpeg filter argument."""
+    return str(path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+
+
+def title_filter(t: dict, text_file: Path) -> str:
+    end, fade = t["at"] + t["dur"], min(0.3, t["dur"] / 3)
+    alpha = (f"if(lt(t\\,{t['at'] + fade:.3f})\\,(t-{t['at']:.3f})/{fade:.3f}\\,"
+             f"if(gt(t\\,{end - fade:.3f})\\,({end:.3f}-t)/{fade:.3f}\\,1))")
+    font = next((f for f in FONTS if Path(f).is_file()), None)
+    parts = [f"textfile='{_esc(text_file)}'", "fontcolor=white", f"alpha='{alpha}'",
+             f"enable='between(t\\,{t['at']:.3f}\\,{end:.3f})'", "x=(w-text_w)/2"]
+    if font:
+        parts.append(f"fontfile='{_esc(font)}'")
+    if t["style"] == "lower":
+        parts += ["fontsize=h/18", "y=h*0.80", "box=1", "boxcolor=black@0.45", "boxborderw=h/60"]
+    else:
+        parts += ["fontsize=h/11", "y=(h-text_h)/2", "shadowcolor=black@0.5", "shadowx=2", "shadowy=2"]
+    return "drawtext=" + ":".join(parts)
+
+
 def render_command(root: Path, cut: dict, size: str, codec: str, out: Path) -> tuple[list[str], float]:
     """The ffmpeg command for a cut, and its running time in seconds."""
-    if not cut["clips"]:
+    items = cut["clips"]
+    if not items:
         raise ValueError("the cut is empty")
     if size not in SIZES or codec not in CODECS:
         raise ValueError("unknown size or codec")
     height = SIZES[size]
-    sources, filters, joins = [], [], []
-    first_meta = None
-    for i, c in enumerate(cut["clips"]):
+    scale = f"scale=-2:{height}" if height else "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+    inputs, graph, fps = [], [], None
+    lengths = []
+    for i, c in enumerate(items):
         d = root / c["shoot"]
         path = clips.clip_files(d).get(c["key"]) if d.is_dir() else None
         if path is None:
@@ -154,36 +266,75 @@ def render_command(root: Path, cut: dict, size: str, codec: str, out: Path) -> t
         if not path.is_file():
             raise ValueError(f"{path.name} is on a drive that is not plugged in")
         meta = clips.clip_meta(d, c["key"], path)
-        first_meta = first_meta or meta
-        length = c["out"] - c["in"]
-        sources += ["-ss", f"{c['in']:.3f}", "-t", f"{length:.3f}", "-i", str(path)]
-        chain = []
+        fps = fps or meta.get("fps") or 30
+        speed, span = c.get("speed", 1), c["out"] - c["in"]
+        lengths.append(span / speed)
+        inputs += ["-ss", f"{c['in']:.3f}", "-t", f"{span:.3f}", "-i", str(path)]
+        chain = [f"setpts=(PTS-STARTPTS)/{speed}", scale, "setsar=1", f"fps={fps}"]
         if cut.get("log709") and clips.is_log(meta):
             folder = d / ".preview" / clips.CLIP_DIR
             folder.mkdir(parents=True, exist_ok=True)
-            curve = str(clips._curve_file(folder)).replace("\\", "/").replace(":", "\\:")
-            chain += ["format=rgb24", f"lut1d=file='{curve}'", "eq=saturation=1.25"]
-        joins.append((i, has_audio(path), length))
-        filters.append((i, chain))
-    fps = first_meta.get("fps") or 30
-    scale = f"scale=-2:{height}" if height else "scale=trunc(iw/2)*2:trunc(ih/2)*2"
-    graph = []
-    for i, chain in filters:
-        graph.append(f"[{i}:v]" + ",".join([scale, "setsar=1", f"fps={fps}", *chain, "format=yuv420p"]) + f"[v{i}]")
-    silent = len(cut["clips"])
+            chain += ["format=rgb24", f"lut1d=file='{_esc(clips._curve_file(folder))}'", "eq=saturation=1.25"]
+        graph.append(f"[{len(inputs) // 6 - 1}:v]" + ",".join([*chain, "format=yuv420p", "settb=AVTB"]) + f"[v{i}]")
+        graph.append((i, path, speed))
+    # Sound: each clip's own (slow motion is silent), at clipGain.
+    gain = cut.get("clipGain", 0)
+    n_clips = len(items)
+    audio_graph = []
     extra = []
-    for i, audio, length in joins:
-        if audio:
-            graph.append(f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{i}]")
+    for entry in [g for g in graph if isinstance(g, tuple)]:
+        i, path, speed = entry
+        if speed == 1 and has_audio(path):
+            audio_graph.append(f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo,volume={gain}dB,asetpts=PTS-STARTPTS[a{i}]")
         else:
-            extra += ["-f", "lavfi", "-t", f"{length:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
-            graph.append(f"[{silent}:a]anull[a{i}]")
-            silent += 1
-    graph.append("".join(f"[v{i}][a{i}]" for i in range(len(cut["clips"]))) + f"concat=n={len(cut['clips'])}:v=1:a=1[v][a]")
-    total = sum(length for _, _, length in joins)
+            idx = n_clips + len(extra) // 6
+            extra += ["-f", "lavfi", "-t", f"{lengths[i]:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
+            audio_graph.append(f"[{idx}:a]anull[a{i}]")
+    graph = [g for g in graph if not isinstance(g, tuple)] + audio_graph
+    # Join: a cut concatenates, a transition overlaps the end of what came before.
+    v, a, run = "v0", "a0", lengths[0]
+    for i in range(1, n_clips):
+        trans = items[i].get("trans")
+        if trans:
+            d = trans["dur"]
+            kind = "fadeblack" if trans["type"] == "dip" else "fade"
+            graph.append(f"[{v}][v{i}]xfade=transition={kind}:duration={d:.3f}:offset={run - d:.3f}[vj{i}]")
+            graph.append(f"[{a}][a{i}]acrossfade=d={d:.3f}[aj{i}]")
+            run += lengths[i] - d
+        else:
+            graph.append(f"[{v}][{a}][v{i}][a{i}]concat=n=2:v=1:a=1[vj{i}][aj{i}]")
+            run += lengths[i]
+        v, a = f"vj{i}", f"aj{i}"
+    total = run
+    titles = cut.get("titles", [])
+    if titles:
+        folder = root / ".preview" / "titles"
+        folder.mkdir(parents=True, exist_ok=True)
+        draws = []
+        for k, t in enumerate(titles):
+            text_file = folder / f"{slugify(cut['name']) or 'cut'}-{k}.txt"
+            text_file.write_text(t["text"])
+            draws.append(title_filter(t, text_file))
+        graph.append(f"[{v}]" + ",".join(draws) + "[vt]")
+        v = "vt"
+    music = cut.get("music")
+    if music:
+        song = root / MUSIC_DIR / music["file"]
+        if not song.is_file():
+            raise ValueError(f"music file {music['file']} is missing from the library")
+        idx = n_clips + len(extra) // 6
+        extra += ["-ss", f"{music['start']:.3f}", "-i", str(song)]
+        fade = min(music["fade"], total / 2)
+        chain = [f"[{idx}:a]aresample=48000", "aformat=channel_layouts=stereo", f"volume={music['gain']}dB",
+                 f"atrim=0:{total:.3f}"]
+        if fade:
+            chain += [f"afade=t=in:d={fade:.3f}", f"afade=t=out:st={total - fade:.3f}:d={fade:.3f}"]
+        graph.append(",".join(chain) + "[mus]")
+        graph.append(f"[{a}][mus]amix=inputs=2:duration=first:normalize=0[am]")
+        a = "am"
     cmd = ["ffmpeg", "-hide_banner", "-y", "-nostdin", "-progress", "pipe:1", "-loglevel", "error",
-           *sources, *extra, "-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
-           *encoder(codec), "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", str(out)]
+           *inputs, *extra, "-filter_complex", ";".join(graph), "-map", f"[{v}]", "-map", f"[{a}]",
+           *encoder(codec), "-c:a", "aac", "-b:a", "256k", "-t", f"{total:.3f}", "-movflags", "+faststart", str(out)]
     return cmd, total
 
 

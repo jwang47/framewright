@@ -1194,6 +1194,7 @@ class Handler(BaseHTTPRequestHandler):
             path = urlparse(self.path).path
             expected = {
                 "/api/luts/install": "application/octet-stream",
+                "/api/music/upload": "application/octet-stream",
                 "/api/export": "image/jpeg", "/api/post-export": "image/jpeg",
                 "/headless/result": "image/jpeg", "/headless/error": "text/plain",
             }.get(path, "application/json" if path.startswith("/api/") else None)
@@ -1383,6 +1384,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "no such cut"}, HTTPStatus.NOT_FOUND)
                 return
             self.send_json({"cut": cut})
+            return
+
+        if parts == ["api", "music"]:
+            self.send_json({"music": cuts.music_files(self.root)})
+            return
+
+        if len(parts) == 2 and parts[0] == "music":
+            name = parts[1]
+            path = self.root / cuts.MUSIC_DIR / name
+            if not cuts.SAFE.match(name) or path.suffix.lower() not in cuts.MUSIC_EXTS or not path.is_file():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self.send_file(path, {".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
+                                  ".aif": "audio/aiff", ".aiff": "audio/aiff"}.get(path.suffix.lower(), "audio/mp4"))
             return
 
         if parts == ["api", "cut", "export"]:
@@ -1578,6 +1593,10 @@ class Handler(BaseHTTPRequestHandler):
         if not path.is_file():
             self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, offline(path))
             return
+        self.send_file(path, "video/quicktime" if path.suffix.lower() == ".mov" else "video/mp4")
+
+    def send_file(self, path: Path, ctype: str) -> None:
+        """A media file with HTTP ranges, which players need to seek."""
         size = path.stat().st_size
         try:
             span = clips.byte_range(self.headers.get("Range"), size)
@@ -1588,7 +1607,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         start, end = span or (0, size - 1)
         self.send_response(HTTPStatus.PARTIAL_CONTENT if span else HTTPStatus.OK)
-        ctype = "video/quicktime" if path.suffix.lower() == ".mov" else "video/mp4"
         self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(end - start + 1))
@@ -1869,6 +1887,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             elif url.path == "/api/eject":
                 self.api_eject()
+            elif url.path == "/api/music/upload":
+                self.api_music_upload(parse_qs(url.query).get("name", [""])[0])
             elif url.path == "/api/cut/save":
                 self.api_cut_save(json.loads(self.read_body()))
             elif url.path == "/api/cut/delete":
@@ -2002,6 +2022,31 @@ class Handler(BaseHTTPRequestHandler):
                             phase="planning", error=None, current=None)
         threading.Thread(target=run_offload, args=(self.root, shoots), daemon=True).start()
         self.send_json(_offload)
+
+    def api_music_upload(self, name: str) -> None:
+        """Add a song to <library>/music for cuts to use."""
+        name = re.sub(r"[^A-Za-z0-9_.-]+", "-", Path(name).name).strip("-.")
+        if not name or Path(name).suffix.lower() not in cuts.MUSIC_EXTS:
+            raise ValueError("music must be mp3, m4a, aac, wav, aiff or flac")
+        length_text = self.headers.get("Content-Length", "")
+        if not re.fullmatch(r"[0-9]{1,10}", length_text) or not 0 < int(length_text) <= 1024 ** 3:
+            raise ValueError("music must be under 1 GB")
+        folder = self.root / cuts.MUSIC_DIR
+        folder.mkdir(exist_ok=True)
+        part = folder / f".{name}.part"
+        left = int(length_text)
+        with part.open("wb") as out:
+            while left > 0:
+                chunk = self.rfile.read(min(clips.CHUNK, left))
+                if not chunk:
+                    break
+                out.write(chunk)
+                left -= len(chunk)
+        if left:
+            part.unlink(missing_ok=True)
+            raise ValueError("incomplete upload")
+        part.replace(folder / name)
+        self.send_json({"file": name, "music": cuts.music_files(self.root)})
 
     def api_cut_save(self, body: dict) -> None:
         """Save a cut (new, or under its old slug, renaming if the name changed)."""

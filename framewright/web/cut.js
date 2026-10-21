@@ -335,6 +335,7 @@ export function createCut(app, videos) {
   // --- controls -------------------------------------------------------------------------
 
   $('#cutPick').addEventListener('change', e => { e.target.blur(); e.target.value ? open(e.target.value) : create(); });
+  $('#cutNew').addEventListener('click', e => { e.currentTarget.blur(); create(); });
   $('#cutRename').addEventListener('click', e => {
     e.currentTarget.blur();
     if (!cut) return;
