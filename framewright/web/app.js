@@ -2319,6 +2319,7 @@ async function start() {
       if (boot && e.data !== boot) reload();
       boot = e.data;
     });
+    es.onerror = () => { if (es.readyState === EventSource.CLOSED) setTimeout(connect, 2000); };
     es.addEventListener('change', e => {
       if (e.data !== 'css') return reload();
       for (const link of document.querySelectorAll('link[rel=stylesheet]')) {
@@ -2344,6 +2345,22 @@ async function start() {
     rewatch();
   };
   connect();
+  // Fallback: ask every few seconds too, in case the stream has quietly died
+  // (seen in the Mac app's web view).
+  const check = async () => {
+    if (document.hidden || reloading) return;
+    try {
+      const { version } = await (await fetch('/api/version', { cache: 'no-store' })).json();
+      if (boot && version !== boot) reload();
+      boot ||= version;
+    } catch { /* server restarting */ }
+  };
+  setInterval(check, 4000);
+  document.addEventListener('visibilitychange', check);
+  // When this page was loaded, muted in the header's corner.
+  const t = new Date();
+  $('#reloadedAt').textContent = `Reloaded ${t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  $('#reloadedAt').title = `Page loaded ${t.toLocaleString()}`;
 })();
 
 start();

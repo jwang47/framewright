@@ -219,6 +219,12 @@ SERVER_CODE = (HERE / "server.py", HERE / "lenses.py", HERE / "import_photos.py"
                HERE / "clips.py", HERE / "cuts.py", HERE / "trash.py")
 
 
+def code_version() -> str:
+    """'<boot id> <page code fingerprint>': changes with new server or page code."""
+    page = hashlib.sha1(json.dumps(sorted(mtimes(STATIC.iterdir()).items())).encode()).hexdigest()[:12]
+    return f"{BOOT_ID} {page}"
+
+
 def mtimes(paths) -> dict[str, float]:
     out = {}
     for f in paths:
@@ -1362,6 +1368,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_bytes(src.read_bytes(), "application/octet-stream", "max-age=3600")
             return
 
+        if parts == ["api", "version"]:
+            # Polled by the page as a fallback to the event stream.
+            self.send_json({"version": code_version()})
+            return
+
         if parts == ["api", "events"]:
             # Optionally watch one frame's recipe and proposal as well.
             found = self.frame(query.get("shoot", [""])[0], query.get("key", [""])[0]) \
@@ -1826,8 +1837,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             # The boot id and a fingerprint of the page code: a page that
             # reconnects after missing a change still sees it and reloads.
-            page_rev = hashlib.sha1(json.dumps(sorted(mtimes(STATIC.iterdir()).items())).encode()).hexdigest()[:12]
-            self.wfile.write(f"retry: 500\nevent: hello\ndata: {BOOT_ID} {page_rev}\n\n".encode())
+            self.wfile.write(f"retry: 500\nevent: hello\ndata: {code_version()}\n\n".encode())
             self.wfile.flush()
             seen = mtimes(STATIC.iterdir())
             quiet = 0.0
