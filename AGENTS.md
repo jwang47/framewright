@@ -73,7 +73,7 @@ Keep the application stdlib Python and plain browser JavaScript with no build
 step. Run `python -m unittest discover -s tests -v`,
 `node --test tests/luts.test.mjs tests/segment.test.mjs`, and
 `python tools/check_release.py` for relevant changes. CI runs on Python 3.10/3.12
-and Node 22 across macOS, Linux and Windows. Regenerate and test schema changes.
+and Node 22 on macOS, the only supported platform for now. Regenerate and test schema changes.
 Use fake cards and temporary libraries for import/offload tests. Never test
 removal or offloading against someone's real card or library without a request.
 
