@@ -673,8 +673,7 @@ const library = {
 
   visible() { return [...document.querySelectorAll('#list figure')].map(el => el.dataset.id); },
 
-  // Plain click: just this frame, or, inside a choice of several, make it the
-  // focus without losing the others. ⌘/ctrl-click: add or drop a frame.
+  // Plain click: just this frame, clearing any choice (as in Finder). ⌘/ctrl-click: add or drop a frame.
   // ⇧-click: add every frame from the focus to it. The focus is Sync's source,
   // so adding frames leaves it where it is.
   click(id, e) {
@@ -683,8 +682,6 @@ const library = {
       if (app.chosen.has(id)) app.chosen.delete(id); else app.chosen.add(id);
       this.paint(id);
       if (id === app.focusKey && !app.chosen.has(id)) this.setFocus([...app.chosen].at(-1) || id, false);
-    } else if (app.chosen.size > 1 && app.chosen.has(id)) {
-      this.setFocus(id, false);
     } else if (e.shiftKey && app.focusKey) {
       const vis = this.visible(), a = vis.indexOf(app.focusKey), b = vis.indexOf(id);
       if (a >= 0 && b >= 0) for (const x of vis.slice(Math.min(a, b), Math.max(a, b) + 1)) app.chosen.add(x);
