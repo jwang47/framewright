@@ -104,6 +104,27 @@ class CameraImportTests(unittest.TestCase):
                 clip.unlink()
                 sidecar.unlink()
 
+    def test_clips_and_stills_of_one_day_share_a_shoot(self):
+        self.media("DCIM/100MSDCF/DSC00001.JPG", exif("Sony", "ILME-FX30"))
+        self.media("PRIVATE/M4ROOT/CLIP/C0001.MP4")
+        self.media("PRIVATE/M4ROOT/CLIP/C0001M01.XML",
+                   b'<Device manufacturer="Sony" modelName="ILME-FX30" serialNo="1"/>')
+        shoot = self.library / "2026-03-15_sony-ilme-fx30"
+        self.assertEqual(set(self.plan()), {shoot / "raw", shoot / "video"})
+
+    def test_two_cameras_cards_import_together(self):
+        from framewright import server as studio
+        other = self.base / "card2"
+        self.media("DCIM/100MSDCF/DSC00001.JPG", exif("Sony", "ILME-FX30"))
+        path = other / "DCIM/100LEICA/L1000001.JPG"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(exif("Leica", "Q2"))
+        os.utime(path, (datetime(2026, 3, 15, 12).timestamp(),) * 2)
+        planned = studio.card_plan(self.library, [self.card, other], False)
+        self.assertEqual({d.parent.name for d in planned}, {"2026-03-15_sony-ilme-fx30", "2026-03-15_leica-q2"})
+        groups = studio.describe_plan(self.library, planned, [self.card, other])
+        self.assertEqual(sorted(g["card"] for g in groups), ["card", "card2"])
+
     def test_configured_folder_pattern_and_reject_path_escape(self):
         self.media("frame.JPG", exif("Acme", "Camera"))
         (self.base / "config.json").write_text(json.dumps({"shoot_folder_pattern": "{camera}_{date}"}))
@@ -200,7 +221,7 @@ class CameraImportTests(unittest.TestCase):
         source = self.media("frame.JPG")
         state = {"running": True, "copied": 0, "bytes": 0, "deleted": 0}
         with patch.object(studio, "_import", state):
-            studio.run_import(self.library, self.card, False, True)
+            studio.run_import(self.library, [self.card], False, True)
         self.assertFalse(state["running"])
         self.assertNotIn("error", state)
         self.assertEqual(state["bytes"], len(b"photograph"))
@@ -225,7 +246,7 @@ class CameraImportTests(unittest.TestCase):
             real_place(src, dest, to_store)
         state = {"running": True, "copied": 0, "bytes": 0, "deleted": 0}
         with patch.object(studio, "_import", state), patch.object(studio, "place", side_effect=fail_sidecar):
-            studio.run_import(self.library, self.card, False, True)
+            studio.run_import(self.library, [self.card], False, True)
         self.assertIn("card read failed", state["error"])
         self.assertTrue(photo.exists())
         self.assertTrue(sidecar.exists())

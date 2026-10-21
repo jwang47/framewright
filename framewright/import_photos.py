@@ -130,8 +130,8 @@ def clip_dir(root: Path) -> Path | None:
     return None
 
 
-def find_card() -> Path:
-    """Return the root of the one plugged-in card."""
+def find_cards() -> list[Path]:
+    """Every plugged-in card's root, so cards from several cameras import together."""
     found = [root for root in candidate_card_roots()
              if (root / "DCIM").is_dir() or clip_dir(root) is not None]
     if not found:
@@ -139,6 +139,12 @@ def find_card() -> Path:
             "no camera card found (looked for a DCIM folder on removable volumes).\n"
             "Plug the card in, or pass --source <path to DCIM or card root>."
         )
+    return sorted(found)
+
+
+def find_card() -> Path:
+    """Return the root of the one plugged-in card."""
+    found = find_cards()
     if len(found) > 1:
         listing = "\n".join(f"  {p}" for p in found)
         raise ImportError_(f"multiple cards found; pick one with --source:\n{listing}")
@@ -326,8 +332,15 @@ def clip_model(path: Path) -> str | None:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    match = re.search(r'<Device[^>]*modelName="([^"]*)"', text)
-    return (match.group(1).strip() or None) if match else None
+    match = re.search(r'<Device\b[^>]*>', text)
+    if not match:
+        return None
+    attrs = dict(re.findall(r'(\w+)="([^"]*)"', match.group()))
+    make, model = attrs.get("manufacturer", "").strip(), attrs.get("modelName", "").strip()
+    # Name clips like camera_model() names stills, so a day of both lands in one shoot.
+    if make and model and not model.casefold().startswith(make.casefold()):
+        return f"{make} {model}"
+    return model or make or None
 
 
 def model_slug(model: str) -> str:
@@ -652,8 +665,19 @@ def main(argv: list[str] | None = None) -> int:
         library = resolve_library(args.library) if args.library else default_library()
         if args.offload is not None:
             return offload(library, args.offload, args.dry_run)
-        card = resolve_source(args.source)
-        by_dest = plan(card, library, args.name, args.last, args.force, args.match, args.jpeg_only, args.shoot_folder_pattern or pattern)
+        # Without --source, every plugged-in card imports, one camera's day per folder.
+        cards = [resolve_source(args.source)] if args.source else find_cards()
+        by_dest: dict[Path, list[Path]] = defaultdict(list)
+        for card in cards:
+            try:
+                planned = plan(card, library, args.name, args.last, args.force, args.match, args.jpeg_only,
+                               args.shoot_folder_pattern or pattern)
+            except ImportError_ as exc:
+                if len(cards) == 1 or not str(exc).startswith("no media files"):
+                    raise
+                continue
+            for dest, files in planned.items():
+                by_dest[dest] += files
         root = store_root()
         to_store = not args.local and root is not None and store_mounted(root)
         image_location = str(root) if to_store else "in the library"
@@ -663,7 +687,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"card:    {card}")
+    print("card:    " + ", ".join(str(c) for c in cards))
     print(f"library: {library}")
     print(f"images:  {image_location}")
 

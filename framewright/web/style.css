@@ -508,3 +508,58 @@ figure[draggable="true"] .frame, .strip button[draggable="true"] { cursor: grab;
 #lookDrop { flex-wrap: wrap; }
 #lookDrop select { flex-basis: 100%; }
 #lookDrop.lut-drop { outline: 2px dashed var(--pick); outline-offset: 4px; }
+
+/* loading bar: any request slower than a blink shows a sweep along the top */
+.busy { position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 50; pointer-events: none;
+  opacity: 0; transition: opacity .2s; overflow: hidden; }
+.busy.on { opacity: 1; }
+.busy::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 30%;
+  background: linear-gradient(90deg, transparent, var(--focus), transparent);
+  animation: busy 1s ease-in-out infinite; }
+.busy.determinate::before { animation: none; width: var(--pct, 0%); background: var(--pick); transition: width .3s; }
+@keyframes busy { from { transform: translateX(-100%); } to { transform: translateX(400%); } }
+.card-btn.importing { background: linear-gradient(90deg, rgba(255,176,32,.35) var(--pct, 0%), var(--panel2) var(--pct, 0%));
+  border-color: var(--pick); font-variant-numeric: tabular-nums; }
+
+/* videos */
+#videos { height: calc(100vh - var(--top)); display: flex; flex-direction: column; }
+.frame.clip img { aspect-ratio: 16 / 9; object-fit: cover; }
+.frame .dur, .frame .hfr, .frame .off { position: absolute; bottom: 4px; padding: 0 5px; border-radius: 3px;
+  background: rgba(0,0,0,.7); color: #fff; font-size: 10px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.frame .dur { right: 4px; }
+.frame .hfr { left: 4px; color: var(--focus); }
+.frame .off { top: 4px; left: 4px; bottom: auto; color: var(--pick); }
+.vid-stage { display: flex; align-items: center; justify-content: center; }
+.vid-stage video { width: 100%; height: 100%; object-fit: contain; background: #000; cursor: pointer; }
+.vid-stage video.under-gl { visibility: hidden; }
+.vid-stage canvas { position: absolute; cursor: pointer; }
+.vid-controls { display: flex; gap: 8px; align-items: center; padding: 6px 16px; border-top: 1px solid var(--line); }
+.vid-controls input[type=range] { flex: 1; accent-color: var(--pick); }
+.vid-controls .hint { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vid-meta { display: flex; gap: 10px; flex: 1; min-width: 0; overflow: hidden; color: var(--muted);
+  white-space: nowrap; font-size: 11px; }
+.vid-meta .off { color: var(--pick); }
+#videos .loupe { position: relative; }
+#vidEmpty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+
+/* In the Mac app the header doubles as the title bar, beside the window buttons. */
+.mac-app .top { padding-left: 84px; }
+.mac-app:fullscreen .top, .mac-app.fullscreen-window .top { padding-left: 16px; }
+
+.loupe-clip { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.frame.clip .play { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 30px; height: 30px; border-radius: 50%; background: rgba(0,0,0,.5); color: #fff;
+  font-size: 12px; line-height: 30px; text-align: center; padding-left: 2px; pointer-events: none; }
+main.grid .frame.clip img { aspect-ratio: 3 / 2; }
+
+/* Where a file lives: on the external drive or on this Mac. */
+.frame .where { position: absolute; bottom: 4px; right: 15px; padding: 0 4px; border-radius: 3px;
+  font-size: 9px; font-weight: 600; letter-spacing: .03em; line-height: 14px; background: rgba(0,0,0,.65);
+  opacity: .7; pointer-events: auto; }
+.frame:hover .where, figure.focus .where { opacity: 1; }
+.frame .where.drive { color: #9fd3ff; }
+.frame .where.mac { color: #c8c8c8; }
+.frame .where.gone { color: var(--muted); text-decoration: line-through; }
+.frame.clip .hfr { left: auto; right: 44px; }
+main.small .frame .where { display: none; }
+.frame.clip .where { right: auto; left: 4px; }

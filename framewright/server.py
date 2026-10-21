@@ -92,7 +92,7 @@ from .import_photos import (  # noqa: E402
     JPEG_EXTS,
     RAW_EXTS,
     ImportError_,
-    find_card,
+    find_cards,
     delete_verified_source,
     frame_key,
     offload_file,
@@ -101,6 +101,7 @@ from .import_photos import (  # noqa: E402
     plan,
 )
 from .store import drive_name, read_manifest, store_mounted, stored  # noqa: E402
+from . import clips  # noqa: E402
 from .settings import configured_port, configured_store, resolve_library, save_library, load_config, import_settings  # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "web"
@@ -209,7 +210,8 @@ MASK_RANGES = {
 # one knows the server code changed under it.
 BOOT_ID = uuid.uuid4().hex[:8]
 HERE = Path(__file__).resolve().parent
-SERVER_CODE = (HERE / "server.py", HERE / "lenses.py", HERE / "import_photos.py", HERE / "store.py", HERE / "settings.py")
+SERVER_CODE = (HERE / "server.py", HERE / "lenses.py", HERE / "import_photos.py", HERE / "store.py", HERE / "settings.py",
+               HERE / "clips.py")
 
 
 def mtimes(paths) -> dict[str, float]:
@@ -268,6 +270,12 @@ def shot_time(src: Path, shoot_dir: Path) -> float:
         return stored(shoot_dir).get(src.name, (src, 0.0))[1]
 
 
+def where(src: Path) -> str:
+    """"store" for a file on the external drive, "local" for one in the library."""
+    root = configured_store()
+    return "store" if root is not None and src.is_relative_to(root) else "local"
+
+
 def offline(src: Path) -> str:
     """Why an image can't be read, for a frame whose file is on an unplugged drive."""
     return f"{drive_name()} is not plugged in" if not store_mounted() else f"{src.name} is missing from {drive_name()}"
@@ -286,11 +294,11 @@ def shoot_date(name: str) -> str:
 
 
 def list_shoots(root: Path) -> list[str]:
-    """Shoot folders holding at least one image, newest first."""
+    """Shoot folders holding at least one image or clip, newest first."""
     shoots = [
         d.name for d in root.iterdir()
         if d.is_dir() and (d / "raw").is_dir()
-        and (photo_snapshot(d).sources or read_manifest(d))
+        and (photo_snapshot(d).sources or read_manifest(d) or clips.has_clips(d))
     ]
     _photo_index.retain(root, shoots)
     return sorted(shoots, key=lambda name: (shoot_date(name), name), reverse=True)
@@ -953,43 +961,54 @@ _import_lock = threading.Lock()
 _import: dict = {"running": False}
 
 
-def plugged_card() -> Path | None:
-    """The one plugged-in card, or None (no card, or more than one)."""
+def plugged_cards() -> list[Path]:
+    """Every plugged-in camera card, possibly from several cameras."""
     try:
-        return find_card()
+        return find_cards()
     except ImportError_:
-        return None
+        return []
 
 
-def card_plan(root: Path, card: Path, jpeg_only: bool) -> dict[Path, list[Path]]:
-    """What importing card would copy; empty when nothing on it is new."""
-    try:
-        return plan(card, root, None, None, False, jpeg_only=jpeg_only)
-    except ImportError_ as exc:
-        if str(exc).startswith("no media files"):
-            return {}
-        raise
+def card_plan(root: Path, cards: list[Path], jpeg_only: bool) -> dict[Path, list[Path]]:
+    """What importing the cards would copy; empty when nothing on them is new."""
+    by_dest: dict[Path, list[Path]] = {}
+    for card in cards:
+        try:
+            planned = plan(card, root, None, None, False, jpeg_only=jpeg_only)
+        except ImportError_ as exc:
+            if str(exc).startswith("no media files"):
+                continue
+            raise
+        for dest, files in planned.items():
+            by_dest.setdefault(dest, []).extend(files)
+    return by_dest
 
 
-def describe_plan(root: Path, by_dest: dict[Path, list[Path]]) -> list[dict]:
+def describe_plan(root: Path, by_dest: dict[Path, list[Path]], cards: list[Path] | None = None) -> list[dict]:
+    def card_of(f: Path) -> str:
+        return next((c.name for c in cards or [] if f.is_relative_to(c)), "")
+    groups: dict[tuple[Path, str], list[Path]] = {}
+    for dest, files in by_dest.items():
+        for f in files:
+            groups.setdefault((dest, card_of(f)), []).append(f)
     return [
-        {"shoot": dest.parent.name, "kind": dest.name,
+        {"shoot": dest.parent.name, "kind": dest.name, "card": card,
          "frames": len({frame_key(f) for f in files}), "files": len(files),
          "mb": round(sum(f.stat().st_size for f in files) / (1024 * 1024), 1)}
-        for dest, files in sorted(by_dest.items())
+        for (dest, card), files in sorted(groups.items())
     ]
 
 
-def run_import(root: Path, card: Path, jpeg_only: bool, delete_from_card: bool = False) -> None:
-    """Copy everything new off card, updating _import as it goes. Images go
-    to the external store when it is plugged in (store.py)."""
+def run_import(root: Path, cards: list[Path], jpeg_only: bool, delete_from_card: bool = False) -> None:
+    """Copy everything new off the cards, updating _import as it goes. Images
+    go to the external store when it is plugged in (store.py)."""
     state = _import
     try:
-        by_dest = card_plan(root, card, jpeg_only)
+        by_dest = card_plan(root, cards, jpeg_only)
         files = [(dest, f) for dest, fs in sorted(by_dest.items()) for f in fs]
         to_store = store_mounted()
         state.update(total=len(files), bytes_total=sum(f.stat().st_size for _, f in files),
-                     groups=describe_plan(root, by_dest), to=drive_name() if to_store else "the library")
+                     groups=describe_plan(root, by_dest, cards), to=drive_name() if to_store else "the library")
         for dest, src in files:
             state["current"] = src.name
             size = src.stat().st_size
@@ -1105,6 +1124,7 @@ class Handler(BaseHTTPRequestHandler):
     root: Path | None = None
     setup_token = uuid.uuid4().hex
     warmed: set[str] = set()
+    warmed_clips: set[str] = set()
 
     def log_message(self, fmt: str, *args) -> None:  # quiet
         pass
@@ -1217,6 +1237,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "shoots": shoots,
                 "shootCounts": {shoot: len(frame_sources(self.root / shoot)) for shoot in shoots},
+                "clipCounts": {shoot: n for shoot in shoots if (n := len(clips.clip_files(self.root / shoot)))},
+                "store": drive_name() if configured_store() else None,
+                "storeMounted": store_mounted(),
                 "collections": [
                     {"name": c["name"], "slug": slugify(c["name"]), "days": c.get("days"),
                      "shoots": collection_shoots(self.root, c), "items": len(c.get("items", []))}
@@ -1348,7 +1371,105 @@ class Handler(BaseHTTPRequestHandler):
             self.send_bytes(path.read_bytes(), "image/jpeg", "max-age=3600")
             return
 
+        if parts == ["api", "clips"]:
+            self.api_clips(query.get("shoot", [""])[0])
+            return
+
+        if len(parts) == 3 and parts[0] in ("clip", "clipposter"):
+            self.send_clip(parts[0], parts[1], parts[2].removesuffix(".jpg"))
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND)
+
+    # Videos
+
+    def clip(self, shoot: str, key: str) -> tuple[Path, Path] | None:
+        """(shoot dir, video file) for a clip that exists, else None."""
+        d = self.shoot_dir(shoot)
+        path = clips.clip_files(d).get(key) if d else None
+        return (d, path) if path else None
+
+    def api_clips(self, shoot: str) -> None:
+        """Clips of one shoot, or of every shoot (newest day first) without one."""
+        if shoot:
+            d = self.shoot_dir(shoot)
+            if d is None:
+                self.send_json({"error": "no such shoot"}, HTTPStatus.NOT_FOUND)
+                return
+            dirs = [d]
+        else:
+            dirs = [self.root / s for s in list_shoots(self.root)]
+        out = []
+        for d in dirs:
+            found = clips.list_clips(d, read_picks(d))
+            if found:
+                out.append({"shoot": d.name, "clips": found})
+                if d.name not in self.warmed_clips:
+                    self.warmed_clips.add(d.name)
+                    threading.Thread(target=clips.warm_posters, args=(d,), daemon=True).start()
+        self.send_json({"days": out})
+
+    def send_clip(self, kind: str, shoot: str, key: str) -> None:
+        found = self.clip(shoot, key)
+        if not found:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        d, path = found
+        if kind == "clipposter":
+            try:
+                out = clips.poster(d, key)
+            except FileNotFoundError as exc:
+                self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
+                return
+            except (subprocess.SubprocessError, OSError):
+                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "poster failed")
+                return
+            if out is None:
+                self.send_error(HTTPStatus.NOT_FOUND, "install ffmpeg for video posters")
+                return
+            self.send_bytes(out.read_bytes(), "image/jpeg", "max-age=3600")
+            return
+        if not path.is_file():
+            self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, offline(path))
+            return
+        size = path.stat().st_size
+        try:
+            span = clips.byte_range(self.headers.get("Range"), size)
+        except ValueError:
+            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.end_headers()
+            return
+        start, end = span or (0, size - 1)
+        self.send_response(HTTPStatus.PARTIAL_CONTENT if span else HTTPStatus.OK)
+        ctype = "video/quicktime" if path.suffix.lower() == ".mov" else "video/mp4"
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if span:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        try:
+            with path.open("rb") as handle:
+                handle.seek(start)
+                left = end - start + 1
+                while left > 0:
+                    chunk = handle.read(min(clips.CHUNK, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass    # the player seeked elsewhere and dropped this request
+
+    def api_clip_action(self, action: str, body: dict) -> None:
+        found = self.clip(str(body.get("shoot", "")), str(body.get("key", "")))
+        if not found:
+            self.send_json({"error": "no such clip"}, HTTPStatus.NOT_FOUND)
+            return
+        clips.reveal(found[1], open_it=action == "open")
+        self.send_json({"ok": True})
 
     def shoot_frames(self, shoot: str) -> list[dict]:
         """Every frame of one shoot, in capture order."""
@@ -1379,6 +1500,7 @@ class Handler(BaseHTTPRequestHandler):
                 "edited": edit_path(d, key).is_file(),
                 "proposed": proposal_path(d, key).is_file(),
                 "exported": (d / EXPORT_DIR / f"{key}.jpg").is_file(),
+                "where": where(src),
             }
             for key, src in sources
         ]
@@ -1514,6 +1636,8 @@ class Handler(BaseHTTPRequestHandler):
                                 "looks": all_looks(self.root)})
             elif url.path == "/api/pick":
                 self.api_pick(json.loads(self.read_body()))
+            elif url.path in ("/api/clip/reveal", "/api/clip/open"):
+                self.api_clip_action(url.path.rsplit("/", 1)[1], json.loads(self.read_body()))
             elif url.path.startswith("/api/collections/"):
                 self.api_collections(url.path.rsplit("/", 1)[1], json.loads(self.read_body()))
             elif url.path.startswith("/api/looks/"):
@@ -1581,16 +1705,17 @@ class Handler(BaseHTTPRequestHandler):
         Presence alone is cheap, so the page can poll it; the plan reads every
         file's date off the card and is only asked for when the card appears.
         """
-        card = plugged_card()
-        if card is None:
-            self.send_json({"card": None})
+        cards = plugged_cards()
+        if not cards:
+            self.send_json({"card": None, "cards": []})
             return
-        body: dict = {"card": card.name, "eject": sys.platform == "darwin",
+        body: dict = {"card": ", ".join(c.name for c in cards), "cards": [c.name for c in cards],
+                      "eject": sys.platform == "darwin", "store": drive_name() if store_mounted() else None,
                       "deleteFromCard": import_settings()[1],
                       "to": drive_name() if store_mounted() else (f"the library ({drive_name()} not plugged in)" if configured_store() else "the library")}
         if with_plan:
             try:
-                body["groups"] = describe_plan(self.root, card_plan(self.root, card, jpeg_only))
+                body["groups"] = describe_plan(self.root, card_plan(self.root, cards, jpeg_only), cards)
             except (ImportError_, OSError) as exc:
                 body["error"] = str(exc)
         self.send_json(body)
@@ -1600,8 +1725,8 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(delete_from_card, bool):
             self.send_json({"error": "deleteFromCard must be a boolean"}, HTTPStatus.BAD_REQUEST)
             return
-        card = plugged_card()
-        if card is None:
+        cards = plugged_cards()
+        if not cards:
             self.send_json({"error": "no camera card plugged in"}, HTTPStatus.CONFLICT)
             return
         with _import_lock:
@@ -1612,9 +1737,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "wait for the offload to finish"}, HTTPStatus.CONFLICT)
                 return
             _import.clear()
-            _import.update(running=True, card=card.name, copied=0, total=0, bytes=0,
+            _import.update(running=True, card=", ".join(c.name for c in cards), copied=0, total=0, bytes=0,
                            bytes_total=0, groups=[], error=None, current=None, deleted=0)
-        threading.Thread(target=run_import, args=(self.root, card, bool(body.get("jpegOnly")), delete_from_card),
+        threading.Thread(target=run_import, args=(self.root, cards, bool(body.get("jpegOnly")), delete_from_card),
                          daemon=True).start()
         self.send_json(_import)
 
@@ -1654,22 +1779,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(_offload)
 
     def api_eject(self) -> None:
-        card = plugged_card()
-        if card is None:
+        cards = plugged_cards()
+        if not cards:
             self.send_json({"error": "no camera card plugged in"}, HTTPStatus.CONFLICT)
             return
         if _import.get("running"):
             self.send_json({"error": "wait for the import to finish"}, HTTPStatus.CONFLICT)
             return
-        error = eject(card)
-        if error:
-            self.send_json({"error": error}, HTTPStatus.BAD_GATEWAY)
+        errors = [f"{card.name}: {error}" for card in cards if (error := eject(card))]
+        if errors:
+            self.send_json({"error": "; ".join(errors)}, HTTPStatus.BAD_GATEWAY)
             return
-        self.send_json({"ejected": card.name})
+        self.send_json({"ejected": ", ".join(c.name for c in cards)})
 
     def api_pick(self, body: dict) -> None:
         shoot, key, picked = body["shoot"], body["key"], bool(body["picked"])
-        found = self.frame(shoot, key)
+        found = self.frame(shoot, key) or self.clip(shoot, key)
         if not found:
             self.send_json({"error": "no such frame"}, HTTPStatus.NOT_FOUND)
             return

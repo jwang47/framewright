@@ -7,11 +7,13 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<div id="busy" class="busy" aria-hidden="true"></div>
 <header class="top">
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="library" aria-selected="true">Library <kbd>G</kbd></button>
     <button role="tab" data-tab="develop" aria-selected="false">Develop <kbd>D</kbd></button>
     <button role="tab" data-tab="post" aria-selected="false" aria-keyshortcuts="P">Post <kbd>P</kbd></button>
+    <button role="tab" data-tab="videos" aria-selected="false" aria-keyshortcuts="T">Videos <kbd>T</kbd></button>
   </nav>
   <select id="shoot" aria-label="Collection or day"></select>
   <div class="search">
@@ -21,7 +23,7 @@
   <span class="counts"><span class="pickcount" id="count">0</span> picked of <span id="total">0</span></span>
   <span class="counts" id="postCount" hidden><span class="postn" id="postN">0</span> here in <span id="postName"></span></span>
   <span class="status" id="status" role="status"></span>
-  <button id="importBtn" class="card-btn" hidden title="Import new photos from the camera card">Import</button>
+  <button id="importBtn" class="card-btn" hidden title="Import everything new from the camera card in one click">Import</button>
   <button id="offloadBtn" class="card-btn" hidden>Offload</button>
 </header>
 
@@ -46,6 +48,8 @@
   <div id="importPlan"></div>
   <label class="hint jpeg-only"><input type="checkbox" id="importJpeg"> JPEGs only (raws and clips stay on the card)</label>
   <label class="hint jpeg-only"><input type="checkbox" id="importDelete"> Delete from card after verified copy</label>
+  <label class="hint jpeg-only"><input type="checkbox" id="importAuto"> Import automatically when a card is connected</label>
+  <label class="hint jpeg-only"><input type="checkbox" id="importAutoEject"> Eject the card when the import finishes</label>
   <div id="importProgress" hidden>
     <progress id="importBar" max="1" value="0"></progress>
     <div class="hint" id="importNow"></div>
@@ -76,8 +80,10 @@
 <section id="library" class="tab" role="tabpanel">
   <div class="toolbar">
     <select id="filter" aria-label="Show" title="Cycle All, Picks and Collection (O); toggle Picks (F)" aria-keyshortcuts="O F">
-      <option value="all">All photos</option>
+      <option value="all">Photos and videos</option>
       <option value="picks">Picks (F)</option>
+      <option value="photos">Photos only</option>
+      <option value="videos">Videos only</option>
       <option value="post" hidden></option>
     </select>
     <label class="zoom">Size <kbd>−</kbd>
@@ -96,12 +102,13 @@
       <summary>Shortcuts</summary>
       <div class="shortcut-list">
         <kbd>H J K L / arrows</kbd><span>Move between photos</span>
-        <kbd>Space</kbd><span>Pick / unpick</span>
+        <kbd>Space / X</kbd><span>Pick / unpick a photo</span>
         <kbd>S</kbd><span>Add to / remove from collection</span>
         <kbd>O</kbd><span>Cycle All / Picks / Collection</span>
         <kbd>[ ] / drag</kbd><span>Reorder collection</span>
         <kbd>G / D / P</kbd><span>Library / Develop / Post</span>
         <kbd>I / V</kbd><span>Inspect at 1:1 / highlight fine edges</span>
+        <kbd>Space / Enter</kbd><span>Play / pause a video (X picks it)</span>
       </div>
     </details>
   </div>
@@ -124,6 +131,7 @@
           <canvas id="loupeMap"></canvas><span id="loupeMapBox"></span>
         </button>
       </div>
+      <div class="loupe-clip" id="loupeClip" hidden></div>
       <div class="loupe-bar">
         <span class="name" id="loupeName"></span>
         <span id="loupeTime"></span>
@@ -132,8 +140,64 @@
         <button id="loupeSel" data-hotkey="S" aria-keyshortcuts="S" hidden>Add to collection</button>
         <button id="loupeSync" data-hotkey="⌘⇧S" aria-keyshortcuts="Meta+Shift+S Control+Shift+S" hidden title="Copy this frame's look and settings to every chosen frame (⌘⇧S)"></button>
         <button id="loupeDev" data-hotkey="D" aria-keyshortcuts="D">Develop</button>
+        <button id="loupeOpen" hidden title="Open in the default video player">Open</button>
         <button id="loupeFs" data-hotkey="⇧F" aria-keyshortcuts="Shift+F" title="Fullscreen (⇧F)" aria-label="Fullscreen">⤢</button>
       </div>
+    </aside>
+  </div>
+</section>
+
+<section id="videos" class="tab" role="tabpanel" hidden>
+  <div class="toolbar">
+    <select id="vidScope" aria-label="Which videos">
+      <option value="day">This day</option>
+      <option value="all">All days</option>
+    </select>
+    <select id="vidFilter" aria-label="Show" title="Toggle Picks (F)">
+      <option value="all">All clips</option>
+      <option value="picks">Picks (F)</option>
+    </select>
+    <span class="hint" id="vidCount"></span>
+    <details class="shortcut-help">
+      <summary>Shortcuts</summary>
+      <div class="shortcut-list">
+        <kbd>H J K L / arrows</kbd><span>Move between clips</span>
+        <kbd>Space / Enter</kbd><span>Play / pause</span>
+        <kbd>, .</kbd><span>Step one frame back / forward</span>
+        <kbd>X</kbd><span>Pick / unpick</span>
+        <kbd>F</kbd><span>Show picks only</span>
+        <kbd>O / R</kbd><span>Open in player / reveal in Finder</span>
+        <kbd>G / D / P / T</kbd><span>Library / Develop / Post / Videos</span>
+      </div>
+    </details>
+  </div>
+  <div class="lib with-loupe">
+    <main id="vidList" class="grid"></main>
+    <aside class="loupe">
+      <div class="loupe-stage vid-stage" id="vidStage">
+        <video id="vidPlayer" playsinline preload="auto"></video>
+        <canvas id="vidGL" hidden></canvas>
+      </div>
+      <div class="vid-controls" id="vidBar">
+        <button id="vidPlay" aria-label="Play" title="Play / pause (Space)">▶</button>
+        <input type="range" id="vidSeek" min="0" max="0" step="0.01" value="0" aria-label="Position">
+        <span class="hint" id="vidClock">0:00 / 0:00</span>
+        <select id="vidRate" aria-label="Speed" title="Playback speed">
+          <option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option>
+        </select>
+        <button id="vidMute" aria-label="Mute">🔊</button>
+        <button id="vidFs" aria-label="Fullscreen" title="Fullscreen">⤢</button>
+      </div>
+      <div class="loupe-bar">
+        <span class="name" id="vidName"></span>
+        <span id="vidTime"></span>
+        <span class="vid-meta" id="vidMeta"></span>
+        <button id="vidLog" aria-pressed="true" hidden title="Show log footage with an approximate display conversion (viewing only, not a grade)">Log preview</button>
+        <button id="vidPick" data-hotkey="X">☆ Pick</button>
+        <button id="vidOpen" data-hotkey="O" title="Open in the default video player">Open</button>
+        <button id="vidReveal" data-hotkey="R" title="Reveal in Finder">Reveal</button>
+      </div>
+      <div class="empty" id="vidEmpty" hidden>No clip selected.</div>
     </aside>
   </div>
 </section>

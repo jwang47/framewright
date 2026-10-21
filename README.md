@@ -46,6 +46,15 @@ photos into slides. The app reloads code changes and watches recipes/proposals
 for live updates; revision checks prevent stale saves from silently overwriting
 newer work.
 
+### Mac app
+
+`macos/build.sh` builds `dist/Framewright.app` (`--install` copies it to
+/Applications). It needs the Xcode command line tools and runs the bundled
+package with your Python 3.10+, in its own window on a private port. It adds
+File ▸ Import from Card (⌘I), ⌘1–4 for the tabs, Dock progress and a
+notification when an import finishes, keeps the Mac awake while importing,
+and asks before quitting mid-import. Closing the window keeps it running.
+
 ## Settings and storage
 
 Library selection is `--library`, then `$STUDIO_LIBRARY`, then saved config.
@@ -110,6 +119,19 @@ posts/<collection>/NN.jpg           exported post slides
 ## Import and send
 
 Connect a card with DCIM, or a Sony M4ROOT/CLIP layout, to use **Import**.
+One click copies everything new, straight to the store when it is plugged in;
+the button shows progress, speed and time left. Cards from several cameras
+can be connected at once and import together, each camera's day into its own
+shoot. The dialog (right-click the button, or click it while importing)
+offers importing automatically when a card connects and ejecting afterwards.
+
+The **Library** shows a day's photos and clips together in shooting order;
+filter to photos or videos only. **Videos** (T) lists clips for a day or the
+whole library with a player (Space plays, X picks, `,`/`.` step frames), and
+Open/Reveal hand a clip to QuickTime or Finder. With ffmpeg installed, clips
+get poster frames; S-Log clips show through an approximate display conversion
+(viewing only, toggle with **Log preview**). An SSD or Mac tag on each item
+says whether its file is on the store or in the library.
 Windows detection checks removable drive types. CLI import can also read any
 explicit source folder:
 

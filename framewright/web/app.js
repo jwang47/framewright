@@ -10,6 +10,7 @@ import { createDevelop } from './develop.js';
 import { createPost } from './post.js';
 import { createFullscreen } from './fullscreen.js';
 import { createSync } from './sync.js';
+import { createVideos } from './videos.js';
 import { Renderer, loadBitmap, lutsReady, normalize, orientedSize } from './render.js';
 import { sourceOf, loadSource, prefetch, release, paintSourceTag, SOURCE_LABEL } from './source.js';
 
@@ -32,8 +33,58 @@ function dayLabel(shoot) {
   return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
+// The Mac app (macos/) listens for these to show notifications, badge the
+// Dock and keep the Mac awake during an import; in a browser they do nothing.
+function native(message) {
+  try { window.webkit?.messageHandlers?.framewright?.postMessage(message); } catch { /* browser */ }
+}
+
+function notify(title, body) {
+  if (window.webkit?.messageHandlers?.framewright) return native({ type: 'notify', title, body });
+  if (document.hasFocus() || !('Notification' in window)) return;
+  if (Notification.permission === 'granted') new Notification(title, { body });
+}
+
+// In the Mac app, empty parts of the header move the window like a title bar.
+if (window.webkit?.messageHandlers?.framewright) {
+  const top = document.querySelector('header.top');
+  const empty = e => e.target === top || e.target.matches?.('.counts, .counts *, .status');
+  top.addEventListener('mousedown', e => { if (e.button === 0 && e.detail === 1 && empty(e)) native({ type: 'drag' }); });
+  top.addEventListener('dblclick', e => { if (empty(e)) native({ type: 'zoom' }); });
+}
+
+// A thin sweep along the top while any request takes longer than a blink.
+(function loadingBar() {
+  const bar = document.getElementById('busy');
+  const plain = window.fetch.bind(window);
+  let pending = 0, timer = null;
+  const done = () => { if (--pending <= 0) { pending = 0; clearTimeout(timer); timer = null; bar.classList.remove('on'); } };
+  window.fetch = (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    // Polls run constantly in the background; they shouldn't flicker the bar.
+    if (/\/api\/(card|import|offload|events)(\?|$)/.test(url) && !(init?.method === 'POST')) return plain(input, init);
+    pending++;
+    timer ??= setTimeout(() => bar.classList.add('on'), 150);
+    return plain(input, init).finally(done);
+  };
+})();
+
 export const app = {
   shootDate,
+  dayLabel,
+  clipCounts: {},
+  storeName: 'external drive',
+  storeMounted: false,
+  // A small "SSD" / "Mac" tag saying where a photo or clip's file lives.
+  whereTag(item) {
+    if (!item.where) return '';
+    const drive = item.where === 'store';
+    const title = drive ? `On ${this.storeName}${this.storeMounted ? '' : ' (not plugged in)'}` : 'On this Mac, in the library';
+    return `<span class="where ${drive ? 'drive' : 'mac'}${drive && !this.storeMounted ? ' gone' : ''}" title="${title}">${drive ? 'SSD' : 'Mac'}</span>`;
+  },
+  whereText(item) {
+    return !item.where ? '' : item.where === 'store' ? `on ${this.storeName}` : 'on this Mac';
+  },
   view: null,          // {kind: 'shoot'|'collection', id, name, days}
   frames: [],          // [{id, shoot, key, time, picked, edited, exported, selected}]
   collections: [],     // [{name, slug, days, shoots, items}] from /api/shoots
@@ -42,7 +93,10 @@ export const app = {
   chosen: new Set(),   // frame ids ⌘/⇧-clicked in the library, for Sync; the focus is one of them
   tab: 'library',
 
+  clips: [],           // the day's video clips, ids 'clip:shoot/key'; only the Library and Videos show them
   frame(id) { return this.frames.find(f => f.id === id); },
+  clip(id) { return this.clips.find(c => c.id === id); },
+  isClip(id) { return typeof id === 'string' && id.startsWith('clip:'); },
   src(kind, f) { return `/${kind}/${encodeURIComponent(f.shoot)}/${f.key}.jpg`; },
   isCollection() { return this.view?.kind === 'collection'; },
   targetName() { return this.collections.find(c => c.slug === this.target)?.name || ''; },
@@ -71,8 +125,8 @@ export const app = {
   },
 
   updateCounts() {
-    $('#count').textContent = this.frames.filter(f => f.picked).length;
-    $('#total').textContent = this.frames.length;
+    $('#count').textContent = this.frames.filter(f => f.picked).length + this.clips.filter(c => c.picked).length;
+    $('#total').textContent = this.frames.length + this.clips.length;
     const n = this.frames.filter(f => f.selected).length;
     $('#postCount').hidden = !this.target;
     $('#postN').textContent = n;
@@ -87,19 +141,24 @@ export const app = {
     $('#library').hidden = tab !== 'library';
     $('#develop').hidden = tab !== 'develop';
     $('#post').hidden = tab !== 'post';
+    $('#videos').hidden = tab !== 'videos';
+    if (tab !== 'videos') videos.hide();
     if (tab === 'post') {
       post.show();
+    } else if (tab === 'videos') {
+      videos.show();
     } else if (tab === 'library') {
       library.render();
       // After layout, so the selected thumbnail is scrolled into view.
       requestAnimationFrame(() => library.setFocus(this.focusKey));
     } else {
-      develop.show(this.focusKey);
+      develop.show(this.isClip(this.focusKey) ? (this.frames[0]?.id ?? null) : this.focusKey);
     }
     this.syncUrl();
   },
 
   async togglePick(id) {
+    if (this.isClip(id)) return this.toggleClipPick(id);
     const f = this.frame(id);
     f.picked = !f.picked;
     library.paint(id);
@@ -116,8 +175,25 @@ export const app = {
     }
   },
 
+  async toggleClipPick(id) {
+    const c = this.clip(id);
+    c.picked = !c.picked;
+    library.paint(id);
+    this.updateCounts();
+    try {
+      await this.post('/api/pick', { shoot: c.shoot, key: c.key, picked: c.picked });
+      this.status(c.picked ? `picked ${c.key}` : `unpicked ${c.key}`);
+    } catch {
+      c.picked = !c.picked;
+      library.paint(id);
+      this.updateCounts();
+      this.status('save failed — is the server running?', 0);
+    }
+  },
+
   // Add to or take out of the target collection. New photos go last.
   async toggleSelect(id) {
+    if (this.isClip(id)) return this.status('collections hold photos; videos come with video editing', 3000);
     if (!this.target) return this.status('make a collection first: New collection', 3000);
     const f = this.frame(id), name = this.targetName();
     try {
@@ -210,9 +286,44 @@ const library = {
 
   shown() {
     const f = this.filter();
-    if (f === 'picks') return app.frames.filter(x => x.picked);
     if (f === 'post') return app.frames.filter(x => x.selected).sort((a, b) => a.selected - b.selected);
-    return app.frames;
+    if (f === 'photos') return app.frames;
+    if (f === 'videos') return app.clips;
+    const all = this.merged();
+    return f === 'picks' ? all.filter(x => x.picked) : all;
+  },
+
+  // Photos and clips of a day in shooting order (photos keep their own order).
+  merged() {
+    if (!app.clips.length) return app.frames;
+    const out = [], clips = [...app.clips];
+    for (const f of app.frames) {
+      while (clips.length && clips[0].shoot === f.shoot && clips[0].time < f.time) out.push(clips.shift());
+      out.push(f);
+    }
+    return out.concat(clips);
+  },
+
+  clipFigure(c) {
+    const fig = document.createElement('figure');
+    fig.id = 'f-' + c.id;
+    fig.dataset.id = c.id;
+    fig.className = 'is-clip';
+    fig.innerHTML = `
+      <div class="frame clip">
+        <img loading="lazy" decoding="async" draggable="false" alt="${c.key}" src="/clipposter/${encodeURIComponent(c.shoot)}/${c.key}.jpg">
+        <button class="star" aria-label="Pick ${c.key}"></button>
+        <span class="play" aria-hidden="true">▶</span>
+        <span class="dur">${videos.clock(c.duration)}</span>
+        ${c.captureFps || c.fps > 61 ? `<span class="hfr">${Math.round(c.captureFps || c.fps)}p</span>` : ''}
+        ${c.online ? '' : '<span class="off" title="On a drive that is not plugged in">offline</span>'}
+        ${app.whereTag(c)}
+      </div>
+      <figcaption><span class="name">${c.key}</span><span>${c.time}</span></figcaption>`;
+    fig.querySelector('.frame').addEventListener('click', e => this.click(c.id, e));
+    fig.querySelector('.frame').addEventListener('dblclick', () => { this.setFocus(c.id, false); videos.toggle(); });
+    fig.querySelector('.star').addEventListener('click', e => { e.stopPropagation(); this.setFocus(c.id, false); app.togglePick(c.id); });
+    return fig;
   },
 
   render() {
@@ -222,6 +333,11 @@ const library = {
     const byDay = app.isCollection() && !!app.view.days && this.filter() !== 'post';
     let day = null;
     for (const f of frames) {
+      if (f.video) {
+        $('#list').appendChild(this.clipFigure(f));
+        this.paint(f.id);
+        continue;
+      }
       if (byDay && f.shoot !== day) {
         day = f.shoot;
         const n = frames.filter(x => x.shoot === day).length;
@@ -242,6 +358,7 @@ const library = {
           <span class="src"></span>
           <span class="prop" title="A proposed edit is waiting: open in Develop to compare">proposal</span>
           <span class="dot"></span>
+          ${app.whereTag(f)}
         </div>
         <figcaption><span class="name">${f.key}</span><span>${f.time}</span></figcaption>`;
       fig.querySelector('.frame').addEventListener('click', e => this.click(f.id, e));
@@ -259,8 +376,13 @@ const library = {
       if (f.params) thumbs.apply(f);
     }
     if (!frames.length) {
-      const msg = { picks: 'Nothing picked yet.', post: 'Nothing in the post yet — press S on a photo to add it.' };
-      list.innerHTML = `<p class="empty">${msg[this.filter()] || 'No frames.'}</p>`;
+      const clips = app.view?.kind === 'shoot' && app.clipCounts[app.view.id];
+      const msg = { picks: 'Nothing picked yet.', post: 'Nothing in the post yet — press S on a photo to add it.',
+        videos: 'No videos on this day.', photos: clips ? 'No photos on this day.' : '' };
+      list.innerHTML = `<p class="empty">${msg[this.filter()] || (clips
+        ? `No photos on this day, but ${clips} video${clips > 1 ? 's' : ''}. <button id="toVideos">Open Videos <kbd>T</kbd></button>`
+        : 'No frames.')}</p>`;
+      $('#toVideos')?.addEventListener('click', () => app.setTab('videos'));
     }
     // Only frames on screen stay chosen, so Sync never reaches a hidden one.
     const shown = new Set(frames.map(f => f.id));
@@ -269,7 +391,31 @@ const library = {
     app.updateCounts();
   },
 
+  paintClip(id) {
+    const c = app.clip(id), fig = document.getElementById('f-' + id);
+    if (!c) return;
+    if (fig) {
+      fig.classList.toggle('picked', c.picked);
+      fig.classList.toggle('focus', id === app.focusKey);
+      fig.querySelector('.star').textContent = c.picked ? '★' : '☆';
+    }
+    if (id === app.focusKey) {
+      $('#loupeName').textContent = c.key;
+      $('#loupeTime').textContent = c.time;
+      const fps = c.captureFps ? `${Math.round(c.captureFps)}p slow motion` : c.fps ? `${c.fps}p` : '';
+      $('#loupeTag').textContent = [videos.clock(c.duration), c.size, fps, videos.pretty(c.gamma),
+        app.whereText(c), c.online ? '' : 'offline'].filter(Boolean).join(' · ');
+      $('#loupePick').textContent = c.picked ? '★ Picked' : '☆ Pick';
+      $('#loupePick').setAttribute('aria-pressed', c.picked);
+      $('#loupePick').dataset.hotkey = 'X';
+      $('#loupeSel').hidden = $('#loupeDev').hidden = true;
+      $('#loupeOpen').hidden = false;
+      $('#loupeOpen').disabled = !c.online;
+    }
+  },
+
   paint(id) {
+    if (app.isClip(id)) return this.paintClip(id);
     const f = app.frame(id);
     if (!f) return;
     const fig = document.getElementById('f-' + id);
@@ -291,11 +437,14 @@ const library = {
       const source = sourceOf(f, f.params);
       $('#loupeTag').innerHTML = [
         f.raw && `<span class="src-tag ${source}">${f.edited ? 'edited from' : 'from'} ${SOURCE_LABEL[source]}</span>`,
-        f.edited && !f.raw && 'edited', f.exported && 'exported', f.proposed && 'proposal waiting',
+        f.edited && !f.raw && 'edited', f.exported && 'exported', f.proposed && 'proposal waiting', app.whereText(f),
       ].filter(Boolean).join(' · ');
       $('#loupePick').textContent = f.picked ? '★ Picked' : '☆ Pick';
       $('#loupePick').setAttribute('aria-pressed', f.picked);
       $('#loupeSel').hidden = !app.target;
+      $('#loupeDev').hidden = false;
+      $('#loupePick').dataset.hotkey = 'Space';
+      $('#loupeOpen').hidden = true;
       $('#loupeSel').textContent = f.selected ? `In collection #${f.selected}` : 'Add to collection';
       $('#loupeSel').title = `${f.selected ? 'Remove from' : 'Add to'} ${app.targetName()} (S)`;
       $('#loupeSel').setAttribute('aria-pressed', !!f.selected);
@@ -309,6 +458,12 @@ const library = {
   // ⇧-click: add every frame from the focus to it. The focus is Sync's source,
   // so adding frames leaves it where it is.
   click(id, e) {
+    // Clips aren't chosen for Sync; clicking one just shows it.
+    if (app.isClip(id) || app.isClip(app.focusKey) && (e.metaKey || e.ctrlKey || e.shiftKey)) {
+      this.choose([]);
+      this.setFocus(id, false);
+      return this.paintChosen();
+    }
     if (e.metaKey || e.ctrlKey) {
       if (!app.chosen.size && app.focusKey) app.chosen.add(app.focusKey);
       if (app.chosen.has(id)) app.chosen.delete(id); else app.chosen.add(id);
@@ -319,6 +474,7 @@ const library = {
     } else if (e.shiftKey && app.focusKey) {
       const vis = this.visible(), a = vis.indexOf(app.focusKey), b = vis.indexOf(id);
       if (a >= 0 && b >= 0) for (const x of vis.slice(Math.min(a, b), Math.max(a, b) + 1)) app.chosen.add(x);
+      for (const x of vis) if (app.isClip(x)) app.chosen.delete(x);
       vis.forEach(x => app.chosen.has(x) && this.paint(x));
     } else {
       this.choose([]);
@@ -351,7 +507,11 @@ const library = {
     this.paint(id);
     const fig = document.getElementById('f-' + id);
     if (fig && scroll) fig.scrollIntoView({ block: 'nearest' });
-    loupe.show(id);
+    const clip = app.clip(id);
+    $('#loupeStage').hidden = !!clip;
+    $('#loupeClip').hidden = !clip;
+    if (clip) videos.lend($('#loupeClip'), clip);
+    else { videos.pause(); loupe.show(id); }
     app.syncUrl();
   },
 
@@ -816,6 +976,11 @@ $('#loupeBtn').addEventListener('click', e => {
   setLoupe($('#loupeBtn').getAttribute('aria-pressed') !== 'true');
 });
 $('#loupePick').addEventListener('click', e => { e.target.blur(); if (app.focusKey) app.togglePick(app.focusKey); });
+$('#loupeOpen').addEventListener('click', e => {
+  e.target.blur();
+  const c = app.clip(app.focusKey);
+  if (c) { videos.pause(); app.post('/api/clip/open', { shoot: c.shoot, key: c.key }).catch(err => app.status(err.message, 4000)); }
+});
 $('#loupeSel').addEventListener('click', e => { e.target.blur(); if (app.focusKey) app.toggleSelect(app.focusKey); });
 $('#loupeSync').addEventListener('click', e => { e.target.blur(); sync.open(); });
 $('#loupeDev').addEventListener('click', e => { e.target.blur(); if (app.focusKey) app.setTab('develop'); });
@@ -904,6 +1069,7 @@ app.bindDevices = async (select, row) => {
 const develop = createDevelop(app);
 const post = createPost(app);
 const fullscreen = createFullscreen(app);
+const videos = createVideos(app);
 const sync = createSync(app, {
   onSaved(f, params) {
     f.edited = params !== null;
@@ -917,8 +1083,10 @@ app.fullscreen = fullscreen;
 // Fullscreen browses what you were browsing: the Library grid as filtered, or
 // the Develop filmstrip; closing lands you on the last photo shown.
 function openFullscreen() {
-  if (app.tab === 'library' && app.focusKey) {
-    fullscreen.open(library.visible(), app.focusKey, id => library.setFocus(id));
+  if (app.tab === 'library' && app.isClip(app.focusKey)) {
+    videos.fullscreen();
+  } else if (app.tab === 'library' && app.focusKey) {
+    fullscreen.open(library.visible().filter(id => !app.isClip(id)), app.focusKey, id => library.setFocus(id));
   } else if (app.tab === 'develop' && develop.current()) {
     fullscreen.open(develop.stripIds(), develop.current(), id => develop.open(id));
   } else if (app.tab === 'post') {
@@ -952,6 +1120,16 @@ addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (k === 'g' && app.tab !== 'library') return app.setTab('library');
   if (k === 'p') { e.preventDefault(); return app.setTab('post'); }
+  if (k === 't') { e.preventDefault(); return app.setTab('videos'); }
+  if (app.tab === 'videos') {
+    if (k === 'd') return app.focusKey && app.setTab('develop');
+    return videos.onKey(e);
+  }
+  if (app.tab === 'library' && app.isClip(app.focusKey)) {
+    // Space plays a video, as everywhere else; X picks it.
+    if (k === ' ' || k === 'enter' || k === 'd') { e.preventDefault(); return videos.toggle(); }
+    if (k === ',' || k === '.') { e.preventDefault(); return videos.step(k === '.' ? 1 : -1); }
+  }
   if (k === 'd' || (k === 'enter' && app.tab === 'library')) {
     if (app.focusKey) app.setTab('develop');
     return;
@@ -964,7 +1142,7 @@ addEventListener('keydown', e => {
   else if (k === 'arrowleft' || k === 'h') { e.preventDefault(); library.move(-1); }
   else if (k === 'arrowdown' || k === 'j') { e.preventDefault(); library.move(library.columns()); }
   else if (k === 'arrowup' || k === 'k') { e.preventDefault(); library.move(-library.columns()); }
-  else if (k === ' ') { e.preventDefault(); if (app.focusKey) app.togglePick(app.focusKey); }
+  else if (k === ' ' || k === 'x') { e.preventDefault(); if (app.focusKey) app.togglePick(app.focusKey); }
   else if (k === 'f') setFilter(library.filter() === 'picks' ? 'all' : 'picks');
   else if ((k === '[' || k === ']') && library.filter() === 'post') nudgePost(k === ']' ? 1 : -1);
   else if (k === 'o') {
@@ -984,8 +1162,9 @@ function libraryShortcut(e) {
   const k = e.key.toLowerCase();
   if (k === 'a') {
     e.preventDefault();
-    library.choose(library.visible());
-    if (!app.chosen.has(app.focusKey)) library.setFocus(library.visible()[0], false);
+    const photos = library.visible().filter(id => !app.isClip(id));
+    library.choose(photos);
+    if (!app.chosen.has(app.focusKey)) library.setFocus(photos[0], false);
   } else if (k === 's' && e.shiftKey) {
     e.preventDefault();
     sync.open();
@@ -1035,11 +1214,15 @@ async function loadView(value, tab, frame) {
   let [kind, id] = value.split(/:(.*)/s);
   if (kind === 'trip') kind = 'collection';          // links from before collections
   const q = kind === 'collection' ? `collection=${encodeURIComponent(id)}` : `shoot=${encodeURIComponent(id)}`;
-  const data = await (await fetch('/api/frames?' + q)).json();
+  const [data, clipData] = await Promise.all([
+    fetch('/api/frames?' + q).then(r => r.json()),
+    kind === 'shoot' ? fetch('/api/clips?' + q).then(r => r.ok ? r.json() : { days: [] }) : { days: [] },
+  ]);
   app.view = { kind, id, name: data.name || id, days: data.days || null };
   app.frames = data.frames.map(f => ({ ...f, id: `${f.shoot}/${f.key}`, selected: 0 }));
+  app.clips = clipData.days.flatMap(d => d.clips).map(c => ({ ...c, id: `clip:${c.shoot}/${c.key}`, video: true }));
   app.chosen = new Set();
-  app.focusKey = app.frame(frame) ? frame : (app.frames[0] || {}).id || null;
+  app.focusKey = app.frame(frame) || app.clip(frame) ? frame : (library.merged()[0] || {}).id || null;
   if (kind === 'collection') setTarget(id);
   // A collection with days is where day picks get narrowed down: start on them.
   const start = kind === 'collection' && app.view.days && app.frames.some(f => f.picked) ? 'picks' : 'all';
@@ -1047,14 +1230,17 @@ async function loadView(value, tab, frame) {
   if (!frame && start === 'picks') app.focusKey = app.frames.find(f => f.picked)?.id ?? app.focusKey;
   develop.reset();
   app.updateCounts();
-  app.setTab(['develop', 'post'].includes(tab) ? tab : 'library');
+  app.setTab(['develop', 'post', 'videos'].includes(tab) ? tab : 'library');
   await loadTarget();
 }
 
 // Rebuild the view menu and the target menu from the server.
 async function refreshMenus(keepView) {
-  const { shoots, shootCounts = {}, collections } = await (await fetch('/api/shoots')).json();
+  const { shoots, shootCounts = {}, clipCounts = {}, store, storeMounted, collections } = await (await fetch('/api/shoots')).json();
   app.collections = collections;
+  app.clipCounts = clipCounts;
+  app.storeName = store || 'external drive';
+  app.storeMounted = storeMounted;
   const sel = $('#shoot');
   const colOpts = collections.map(c => {
     // Two cameras on one day are two shoot folders, so count dates, not folders.
@@ -1063,8 +1249,9 @@ async function refreshMenus(keepView) {
     return `<option value="collection:${c.slug}">${c.name} (${what})</option>`;
   }).join('');
   const shootOpts = shoots.map(s => {
-    const n = shootCounts[s];
-    const count = Number.isInteger(n) ? ` (${n})` : '';
+    const n = shootCounts[s], v = clipCounts[s];
+    const parts = [n ? `${n}` : '', v ? `${v} video${v > 1 ? 's' : ''}` : ''].filter(Boolean);
+    const count = parts.length ? ` (${parts.join(' · ')})` : '';
     return `<option value="shoot:${s}">${s}${count}</option>`;
   }).join('');
   sel.innerHTML = (collections.length ? `<optgroup label="Collections">${colOpts}</optgroup>` : '') +
@@ -1206,19 +1393,33 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
 // --- import from a camera card -------------------------------------------------
 //
 // The header grows an Import button while a card is plugged in, labelled with
-// how many frames on it are new. The dialog shows where they will land, copies
-// them with the same verified copy as import_photos.py, then opens the day.
+// how many frames and clips on it are new. One click starts copying them with
+// the same verified copy as import_photos.py; the button fills as a progress
+// bar with speed and time left, and the dialog (click again) shows detail and
+// options. Optionally imports as soon as a card appears and ejects it after.
 (function cardImport() {
-  const btn = $('#importBtn'), dlg = $('#importDlg'), go = $('#importGo');
-  let card = null, groups = [], running = false, deleteInitialized = false;
+  const btn = $('#importBtn'), dlg = $('#importDlg'), go = $('#importGo'), bar = $('#busy');
+  let card = null, groups = [], running = false, deleteInitialized = false, error = null, dest = null, many = false;
+  const auto = $('#importAuto'), autoEject = $('#importAutoEject');
+  auto.checked = stored('studio.autoImport', '0') === '1';
+  autoEject.checked = stored('studio.autoEject', '0') === '1';
+  auto.addEventListener('change', () => store('studio.autoImport', auto.checked ? '1' : '0'));
+  autoEject.addEventListener('change', () => store('studio.autoEject', autoEject.checked ? '1' : '0'));
 
   const frames = gs => gs.reduce((n, g) => n + g.frames, 0);
   const mb = x => x >= 1024 ? `${(x / 1024).toFixed(1)} GB` : `${Math.round(x)} MB`;
+  const what = gs => {
+    const photos = frames(gs.filter(g => g.kind !== 'video')), clips = frames(gs.filter(g => g.kind === 'video'));
+    return [photos && `${photos} photo${photos > 1 ? 's' : ''}`, clips && `${clips} clip${clips > 1 ? 's' : ''}`]
+      .filter(Boolean).join(' + ') || 'nothing';
+  };
+  const eta = s => !Number.isFinite(s) || s <= 0 ? '' : s < 60 ? `${Math.ceil(s)}s left`
+    : s < 3600 ? `${Math.round(s / 60)} min left` : `${Math.floor(s / 3600)} h ${Math.round(s % 3600 / 60)} min left`;
 
   function label() {
-    const n = frames(groups);
-    btn.textContent = n ? `Import ${n} new` : 'Card: nothing new';
-    btn.title = `${card}: import new photos`;
+    btn.classList.remove('importing');
+    btn.textContent = groups.length ? `Import ${what(groups)}${dest ? ` → ${dest}` : ''}` : 'Card: nothing new';
+    btn.title = groups.length ? `${card}: copy everything new in one click (click again for details)` : `${card}: everything is already imported`;
   }
 
   async function loadPlan() {
@@ -1231,76 +1432,112 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       deleteInitialized = true;
     }
     groups = res.groups || [];
+    error = res.error || null;
+    dest = res.store;
+    many = (res.cards || []).length > 1;
     $('#importCard').textContent = card;
     $('#importEject').hidden = !res.eject;
+    const total = groups.reduce((t, g) => t + g.mb, 0);
     $('#importPlan').innerHTML = res.error ? `<p class="none">${res.error}</p>`
       : !groups.length ? '<p class="none">Everything on this card is already in the library.</p>'
-      : `<table>${groups.map(g => `<tr><td>${g.shoot}${g.kind === 'video' ? ' · video' : ''}</td>
+      : `<table>${groups.map(g => `<tr>${many ? `<td>${g.card}</td>` : ''}<td>${g.shoot}${g.kind === 'video' ? ' · video' : ''}</td>
           <td>${g.frames} ${g.kind === 'video' ? 'clips' : 'frames'}</td><td>${mb(g.mb)}</td></tr>`).join('')}</table>
-        <p class="none">Images go to ${res.to}.</p>`;
+        <p class="none">${what(groups)}, ${mb(total)} in all. Images go to ${res.to}.</p>`;
     go.disabled = running || !groups.length;
-    go.textContent = groups.length ? `Import ${frames(groups)}` : 'Import';
+    go.textContent = groups.length ? `Import ${what(groups)}` : 'Import';
     if (!running) label();
     return true;
   }
 
   // Cheap presence check; the plan is only read when a card appears.
   async function poll() {
-    if (document.hidden || running) return;
+    if (running) return;
     const res = await (await fetch('/api/card')).json().catch(() => ({}));
     if (res.card === card) return;
     card = res.card || null;
     btn.hidden = !card;
-    if (card) await loadPlan();
-    else if (dlg.open) dlg.close();
+    if (!card) { if (dlg.open) dlg.close(); return; }
+    await loadPlan();
+    if (auto.checked && groups.length && !error) {
+      app.status(`${card} connected: importing ${what(groups)}`, 4000);
+      run();
+    }
   }
 
   async function watch() {
     let st;
+    const samples = [];
     do {
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise(r => setTimeout(r, 500));
       st = await (await fetch('/api/import')).json();
       const pct = st.bytes_total ? st.bytes / st.bytes_total : 0;
+      // Speed over the last ~10 seconds, so one big clip doesn't swing it.
+      samples.push([performance.now(), st.bytes || 0]);
+      while (samples.length > 20) samples.shift();
+      const [t0, b0] = samples[0], [t1, b1] = samples.at(-1);
+      const rate = t1 > t0 ? (b1 - b0) / ((t1 - t0) / 1000) : 0;
+      const left = rate > 0 ? (st.bytes_total - st.bytes) / rate : NaN;
+      const speed = rate > 0 ? `${Math.round(rate / 2 ** 20)} MB/s` : '';
       $('#importBar').value = pct;
-      $('#importNow').textContent = st.current ? `${st.copied}/${st.total} · ${st.current}` : '';
-      btn.textContent = `Importing ${Math.round(pct * 100)}%`;
+      $('#importNow').textContent = st.current
+        ? [`${st.copied}/${st.total}`, st.current, speed, eta(left)].filter(Boolean).join(' · ') : '';
+      const p = `${(pct * 100).toFixed(1)}%`;
+      btn.style.setProperty('--pct', p);
+      bar.style.setProperty('--pct', p);
+      btn.textContent = `Importing ${Math.round(pct * 100)}%${eta(left) ? ' · ' + eta(left) : ''}`;
+      document.title = `${Math.round(pct * 100)}% · Framewright`;
+      native({ type: 'import', running: true, progress: pct });
     } while (st.running);
     return st;
   }
 
   async function run() {
+    if (running) return;
     running = true;
     go.disabled = $('#importJpeg').disabled = $('#importDelete').disabled = true;
     $('#importProgress').hidden = false;
+    btn.classList.add('importing');
+    bar.classList.add('on', 'determinate');
+    if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
     try {
       await app.post('/api/import', { jpegOnly: $('#importJpeg').checked, deleteFromCard: $('#importDelete').checked });
       const st = await watch();
       if (st.error) throw new Error(st.error);
       $('#importNow').textContent = `imported ${st.copied} files, verified${st.deleted ? ` · ${st.deleted} source files deleted` : ''}`;
-      app.status(`imported ${frames(st.groups)} from ${st.card}`, 5000);
-      // Open the newest day that got stills, so the new frames are on screen.
+      app.status(`imported ${what(st.groups)} from ${st.card}`, 5000);
+      notify('Import finished', `${what(st.groups)} from ${st.card}, verified.`);
+      // Open the newest day that got anything; a day of only clips opens in Videos.
       const shoots = await refreshMenus(`${app.view?.kind}:${app.view?.id}`);
-      const day = st.groups.filter(g => g.kind === 'raw').map(g => g.shoot).sort((a, b) => shootDate(a).localeCompare(shootDate(b)) || a.localeCompare(b)).pop();
-      if (day && shoots.includes(day)) {
-        $('#shoot').value = `shoot:${day}`;
-        await loadView(`shoot:${day}`, 'library');
+      const newest = [...st.groups].sort((a, b) => shootDate(a.shoot).localeCompare(shootDate(b.shoot)) || a.shoot.localeCompare(b.shoot)).pop();
+      if (newest && shoots.includes(newest.shoot)) {
+        const stills = st.groups.some(g => g.shoot === newest.shoot && g.kind !== 'video');
+        $('#shoot').value = `shoot:${newest.shoot}`;
+        await loadView(`shoot:${newest.shoot}`, stills ? 'library' : 'videos');
       }
+      if (autoEject.checked) $('#importEject').click();
     } catch (e) {
       $('#importNow').textContent = `import stopped: ${e.message}`;
       app.status(`import failed: ${e.message}`, 0);
+      notify('Import stopped', e.message);
     } finally {
       running = false;
+      document.title = 'Framewright';
+      bar.classList.remove('on', 'determinate');
+      native({ type: 'import', running: false, progress: 0 });
       $('#importJpeg').disabled = $('#importDelete').disabled = false;
       await loadPlan().catch(() => {});
     }
   }
 
+  // One click imports; while importing (or with nothing new) it shows details.
   btn.addEventListener('click', async () => {
     btn.blur();
+    if (!running && groups.length && !error) return run();
     $('#importProgress').hidden = !running;
     dlg.showModal();
     if (!running) await loadPlan();
   });
+  btn.addEventListener('contextmenu', e => { e.preventDefault(); dlg.showModal(); if (!running) loadPlan(); });
   $('#importJpeg').addEventListener('change', loadPlan);
   go.addEventListener('click', run);
   $('#importClose').addEventListener('click', () => dlg.close());
@@ -1315,8 +1552,10 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       app.status(`couldn't eject: ${e.message}`, 0);
     }
   });
+  // The Mac app's File ▸ Import menu item (⌘I) lands here.
+  window.framewrightImport = () => (card && groups.length && !running ? run() : btn.hidden ? app.status('no camera card connected', 3000) : btn.click());
   poll();
-  setInterval(poll, 3000);
+  setInterval(poll, 2000);
   document.addEventListener('visibilitychange', poll);
 })();
 

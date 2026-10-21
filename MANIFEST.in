@@ -6,3 +6,4 @@ recursive-include tests *.py *.mjs
 recursive-include tools *.py
 include .githooks/pre-commit .github/workflows/checks.yml
 global-exclude __pycache__ *.py[cod] .DS_Store
+recursive-include macos *.swift *.sh
