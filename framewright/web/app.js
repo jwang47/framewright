@@ -177,7 +177,30 @@ export const app = {
     this.syncUrl();
   },
 
+  // With several chosen (⌘/⇧-click), P and ⌫ apply to them all: on for all
+  // of them, or off for all when every one already has it.
+  async markChosen(field) {
+    const items = [...this.chosen].map(x => this.frame(x) || this.clip(x)).filter(Boolean);
+    const on = !items.every(x => x[field]);
+    const other = field === 'picked' ? 'rejected' : 'picked';
+    const before = items.map(x => ({ x, picked: x.picked, rejected: x.rejected }));
+    for (const x of items) { x[field] = on; if (on) x[other] = false; library.paint(x.id); }
+    develop.paintStrip();
+    this.updateCounts();
+    const results = await Promise.allSettled(items.map(x => this.post('/api/pick', { shoot: x.shoot, key: x.key, [field]: on })));
+    const failed = results.filter(r => r.status === 'rejected').length;
+    if (failed) {
+      for (const b of before) { b.x.picked = b.picked; b.x.rejected = b.rejected; library.paint(b.x.id); }
+      this.updateCounts();
+      return this.status(`save failed for ${failed} of ${items.length}; nothing changed`, 0);
+    }
+    const what = field === 'picked' ? (on ? 'picked' : 'unpicked') : (on ? 'marked for deletion' : 'unmarked');
+    this.status(`${what} ${items.length}`, 2500);
+    if (library.filter() === 'rejects' || library.filter() === 'picks') library.render();
+  },
+
   async togglePick(id) {
+    if (this.chosen.size > 1 && this.chosen.has(id)) return this.markChosen('picked');
     if (this.isClip(id)) return this.toggleClipPick(id);
     const f = this.frame(id);
     f.picked = !f.picked;
@@ -199,6 +222,7 @@ export const app = {
   // Mark for deletion, or unmark. Marked items dim; the Marked filter's
   // Move to Trash clears them out when space is needed.
   async toggleReject(id) {
+    if (this.chosen.size > 1 && this.chosen.has(id)) return this.markChosen('rejected');
     const x = this.frame(id) || this.clip(id);
     if (!x) return;
     const before = { picked: x.picked, rejected: x.rejected };
@@ -586,6 +610,7 @@ const library = {
       fig.classList.toggle('picked', c.picked);
       fig.classList.toggle('rejected', !!c.rejected);
       fig.classList.toggle('focus', id === app.focusKey);
+      fig.classList.toggle('chosen', app.chosen.has(id));
       fig.querySelector('.star').textContent = c.picked ? '★' : '☆';
       const sel = fig.querySelector('.sel');
       sel.hidden = !c.selected;
@@ -653,14 +678,8 @@ const library = {
   // ⇧-click: add every frame from the focus to it. The focus is Sync's source,
   // so adding frames leaves it where it is.
   click(id, e) {
-    // Clips aren't chosen for Sync; clicking one just shows it.
-    if (app.isClip(id) || app.isClip(app.focusKey) && (e.metaKey || e.ctrlKey || e.shiftKey)) {
-      this.choose([]);
-      this.setFocus(id, false);
-      return this.paintChosen();
-    }
     if (e.metaKey || e.ctrlKey) {
-      if (!app.chosen.size && app.focusKey) app.chosen.add(app.focusKey);
+      if (!app.chosen.size && app.focusKey) { app.chosen.add(app.focusKey); this.paint(app.focusKey); }
       if (app.chosen.has(id)) app.chosen.delete(id); else app.chosen.add(id);
       this.paint(id);
       if (id === app.focusKey && !app.chosen.has(id)) this.setFocus([...app.chosen].at(-1) || id, false);
@@ -669,7 +688,6 @@ const library = {
     } else if (e.shiftKey && app.focusKey) {
       const vis = this.visible(), a = vis.indexOf(app.focusKey), b = vis.indexOf(id);
       if (a >= 0 && b >= 0) for (const x of vis.slice(Math.min(a, b), Math.max(a, b) + 1)) app.chosen.add(x);
-      for (const x of vis) if (app.isClip(x)) app.chosen.delete(x);
       vis.forEach(x => app.chosen.has(x) && this.paint(x));
     } else {
       this.choose([]);
@@ -687,9 +705,10 @@ const library = {
   },
 
   paintChosen() {
-    const n = app.chosen.size, b = $('#loupeSync');
-    b.hidden = n < 2;
-    b.textContent = `Sync settings to ${n}…`;
+    // Sync copies a photo's settings to photos; chosen clips just come along for marks.
+    const n = app.chosen.size, photos = [...app.chosen].filter(x => app.frame(x)).length, b = $('#loupeSync');
+    b.hidden = photos < 2 || app.isClip(app.focusKey);
+    b.textContent = `Sync settings to ${photos}…`;
     $('#chosenN').hidden = n < 2;
     $('#chosenN').textContent = `${n} chosen · Esc to clear`;
   },
@@ -1396,12 +1415,12 @@ function libraryShortcut(e) {
     if (app.focusKey) app.toggleReject(app.focusKey);
   } else if (k === 'a') {
     e.preventDefault();
-    const photos = library.visible().filter(id => !app.isClip(id));
-    library.choose(photos);
-    if (!app.chosen.has(app.focusKey)) library.setFocus(photos[0], false);
+    const all = library.visible();
+    library.choose(all);
+    if (!app.chosen.has(app.focusKey)) library.setFocus(all[0], false);
   } else if (k === 's' && e.shiftKey) {
     e.preventDefault();
-    sync.open();
+    if (!app.isClip(app.focusKey)) sync.open();
   } else if (k === 'z' && !e.shiftKey) {
     e.preventDefault();
     sync.undoLast().then(did => did || app.status('nothing to undo here', 1500));
