@@ -376,7 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         web.evaluateJavaScript("document.querySelector('.tabs button[data-tab=\"\(sender.title.lowercased())\"]')?.click()")
     }
     @objc func reload() {
-        if server?.isRunning == true { web.reload() } else { startServer() }
+        if server?.isRunning == true { web.reloadFromOrigin() } else { startServer() }
     }
     @objc func zoomReset() { web.pageZoom = 1 }
     @objc func zoomIn() { web.pageZoom = min(2, web.pageZoom + 0.1) }

@@ -1334,7 +1334,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if not parts or (len(parts) == 1 and parts[0] in {p.name for p in STATIC.iterdir()}):
             path = STATIC / (parts[0] if parts else "index.html")
-            self.send_bytes(path.read_bytes(), STATIC_TYPES.get(path.suffix, "text/plain"))
+            # no-store: the Mac app's web view otherwise reused stale page
+            # code across hot reloads.
+            self.send_bytes(path.read_bytes(), STATIC_TYPES.get(path.suffix, "text/plain"), "no-store")
             return
 
         if parts[0] == "vendor":
