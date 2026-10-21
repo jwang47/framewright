@@ -1863,6 +1863,10 @@ export function createDevelop(app) {
     // Carried explicitly from here on, so a pre-raw edit, once touched, is
     // saved as a JPEG edit rather than flipping to the raw.
     st.params.source = source;
+    // A frame not edited yet starts with its lens profile on, when one is
+    // found and the camera hasn't already corrected it. It's saved with the
+    // first change; opening a frame alone writes nothing.
+    if (!edit.params && st.lens?.profile && !st.lens.inCamera && !st.dngLens) st.params.lens = st.lens.profile;
     st.legacy = !!edit.params && !edit.params.source && source === 'jpeg' && !!f.raw;
     syncSize();
     st.maskSel = -1;
