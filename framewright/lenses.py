@@ -38,7 +38,13 @@ import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path
 
+# The first that holds a database wins. ~/.local/share/lensfun/updates is
+# where Lensfun's own lensfun-update-data (and `framewright lenses --update`)
+# put the newest database, so it comes first.
+LENSFUN_UPDATES = Path.home() / ".local/share/lensfun/updates"
+LENSFUN_URL = "https://lensfun.github.io/db/version_1.tar.bz2"
 LENSFUN_DIRS = [
+    LENSFUN_UPDATES,
     Path("/Applications/darktable.app/Contents/Resources/share/lensfun"),
     Path("C:/Program Files/darktable/share/lensfun"),
     Path("/usr/share/lensfun"),
@@ -114,7 +120,15 @@ def read_lens(path: Path) -> dict | None:
 
 
 def _tokens(text: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9.]+", text.lower().replace("|", " ")))
+    """Comparable words of a lens name. EXIF and Lensfun spell the same lens
+    differently ("E 35mm F1.8 OSS" vs "Sony E 35mm f/1.8 OSS"), so apertures
+    become "f1.8" and "f2.8-4", and focal lengths "35mm" or "18-135mm"."""
+    t = text.lower().replace("|", " ")
+    t = re.sub(r"\bf\s*/\s*(?=\d)", "f", t)                  # f/1.8 -> f1.8
+    t = re.sub(r"\b1\s*:\s*(?=\d)", "f", t)                  # 1:1.8 -> f1.8
+    t = re.sub(r"(\d)\s+mm\b", r"\1mm", t)                   # 35 mm -> 35mm
+    t = re.sub(r"(\d)\s*-\s*(\d)", r"\1-\2", t)              # 18 - 135 -> 18-135
+    return set(re.findall(r"[a-z0-9.\-]+", t)) - {"-"}
 
 
 @lru_cache(maxsize=1)
@@ -255,3 +269,50 @@ def profile_for(path: Path, raw: bool = False) -> dict | None:
     if profile:
         profile.pop("fixed", None)
     return {**lens, "profile": profile, "inCamera": in_camera}
+
+
+# --- updating the database ------------------------------------------------------
+
+
+def update_database() -> int:
+    """Download the newest Lensfun database into LENSFUN_UPDATES; lens count."""
+    import io
+    import shutil
+    import tarfile
+    import tempfile
+    import urllib.request
+    with urllib.request.urlopen(LENSFUN_URL, timeout=60) as response:
+        data = response.read()
+    with tempfile.TemporaryDirectory() as tmp:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:bz2") as tar:
+            members = [m for m in tar.getmembers()
+                       if m.isfile() and re.fullmatch(r"[A-Za-z0-9_.-]+\.(xml|txt)", Path(m.name).name)]
+            for m in members:
+                m.name = Path(m.name).name          # flat: no paths from the archive
+                tar.extract(m, tmp)
+        files = list(Path(tmp).glob("*.xml"))
+        if not files:
+            raise ValueError("the download held no lens database")
+        target = LENSFUN_UPDATES / "version_1"
+        if target.exists():
+            shutil.rmtree(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(tmp, target)
+    _database.cache_clear()
+    return len(_database()[0])
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(prog="framewright lenses", description="Lens profiles (Lensfun).")
+    parser.add_argument("--update", action="store_true", help=f"download the newest Lensfun database to {LENSFUN_UPDATES}")
+    parser.add_argument("--find", metavar="LENS", help="show the profile a lens name matches")
+    parser.add_argument("--focal", type=float, default=0, help="focal length for --find")
+    args = parser.parse_args(argv)
+    if args.update:
+        print(f"{update_database()} calibrated lenses in {LENSFUN_UPDATES / 'version_1'}")
+    if args.find:
+        print(find_profile(args.find, args.focal) or f"no profile for {args.find}")
+    if not args.update and not args.find:
+        print(f"{len(_database()[0])} calibrated lenses available")
+    return 0

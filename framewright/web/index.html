@@ -7,13 +7,54 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<div id="busy" class="busy" aria-hidden="true"></div>
+<div class="shell">
+<nav class="side" aria-label="Main">
+  <div class="brand">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--pick)" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3l3.5 6M21 12h-6.5M16.5 19.8L13 13.8M7.5 19.8l3.5-6M3 12h6.5M7.5 4.2L11 10.2"/></svg>
+    <span class="brand-name">Framewright</span>
+    <button id="navToggle" class="nav-toggle" aria-label="Collapse the sidebar" title="Collapse the sidebar (⌃⌘S)">‹</button>
+  </div>
+  <div class="side-nav">
+    <button class="side-item" id="navLibrary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Library <span class="n" id="navLibraryN"></span></button>
+    <button class="side-item" id="navCollections"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 8h16v12H4z"/><path d="M7 4h10"/></svg>Collections <span class="n" id="navCollectionsN"></span></button>
+    <button class="side-item" id="navPicks"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z"/></svg>Picks <span class="n" id="navPicksN"></span></button>
+  </div>
+  <div class="side-group">
+    <div class="side-label">Recent collections</div>
+    <div id="recentCols"></div>
+  </div>
+  <div class="side-foot">
+    <div class="card-box" id="cardBox" hidden>
+      <div class="card-head">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--pick)" stroke-width="1.8" aria-hidden="true"><path d="M7 3h8l4 4v14H7z"/><path d="M10 7v3M13 7v3M16 7v3"/></svg>
+        <span class="card-name" id="cardName">Camera card</span>
+        <button id="cardRename" class="card-rename" title="Rename the card itself (shows in Finder and on any computer)">Rename</button>
+      </div>
+      <div class="card-empty" id="cardEmpty" hidden>Empty, ready for the camera. <button id="cardEject" class="card-rename">Eject</button></div>
+      <button id="importBtn" class="card-btn" hidden title="Import everything new from the camera card in one click">Import</button>
+      <div class="card-bar" id="cardBar" hidden><div></div></div>
+      <button id="cardCancel" class="card-btn subtle" hidden>Cancel import</button>
+    </div>
+    <div class="drive-row" id="driveRow" hidden>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 12h.01M11 12h6"/></svg>
+      <span id="driveName"></span><span class="n" id="driveFree"></span>
+    </div>
+    <button id="offloadBtn" class="card-btn subtle" hidden>Offload</button>
+  </div>
+</nav>
+<div class="split v nav-split" data-split="nav" role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
+<div class="work">
 <header class="top">
-  <nav class="tabs" role="tablist">
+  <nav class="tabs" role="tablist" aria-label="Workspace">
     <button role="tab" data-tab="library" aria-selected="true">Library <kbd>G</kbd></button>
     <button role="tab" data-tab="develop" aria-selected="false">Develop <kbd>D</kbd></button>
-    <button role="tab" data-tab="post" aria-selected="false" aria-keyshortcuts="P">Post <kbd>P</kbd></button>
+    <button role="tab" data-tab="videos" aria-selected="false" aria-keyshortcuts="T">Cut <kbd>T</kbd></button>
+    <button role="tab" data-tab="post" aria-selected="false" aria-keyshortcuts="Shift+P" hidden>Post <kbd>⇧P</kbd></button>
   </nav>
-  <select id="shoot" aria-label="Collection or day"></select>
+  <button id="viewBack" class="view-back" hidden>‹ Library</button>
+  <h1 class="view-title" id="viewTitle">Library</h1>
+  <select id="shoot" aria-label="Collection or day" hidden></select>
   <div class="search">
     <input id="search" type="search" placeholder="Find a photo   /" autocomplete="off" spellcheck="false" aria-label="Find a photo by name or day">
     <div id="searchResults" role="listbox" hidden></div>
@@ -21,8 +62,7 @@
   <span class="counts"><span class="pickcount" id="count">0</span> picked of <span id="total">0</span></span>
   <span class="counts" id="postCount" hidden><span class="postn" id="postN">0</span> here in <span id="postName"></span></span>
   <span class="status" id="status" role="status"></span>
-  <button id="importBtn" class="card-btn" hidden title="Import new photos from the camera card">Import</button>
-  <button id="offloadBtn" class="card-btn" hidden>Offload</button>
+  <span class="reloaded-at" id="reloadedAt"></span>
 </header>
 
 <dialog id="offloadDlg" aria-labelledby="offloadTitle">
@@ -46,12 +86,16 @@
   <div id="importPlan"></div>
   <label class="hint jpeg-only"><input type="checkbox" id="importJpeg"> JPEGs only (raws and clips stay on the card)</label>
   <label class="hint jpeg-only"><input type="checkbox" id="importDelete"> Delete from card after verified copy</label>
+  <label class="hint jpeg-only"><input type="checkbox" id="importAuto"> Import automatically when a card is connected</label>
+  <label class="hint jpeg-only"><input type="checkbox" id="importAutoEject"> Eject the card when the import finishes</label>
   <div id="importProgress" hidden>
     <progress id="importBar" max="1" value="0"></progress>
     <div class="hint" id="importNow"></div>
   </div>
   <p class="hint">Copies are checked byte for byte against the card. Source files stay on the card unless you enable deletion above.</p>
   <div class="dlg-actions">
+    <button id="importCancel" hidden>Cancel import</button>
+    <button id="importVerify" hidden title="Re-check every photo and clip on the card against the library before you format it in the camera">Check before formatting</button>
     <button id="importEject" hidden>Eject card</button>
     <button id="importClose">Close</button>
     <button id="importGo" class="primary">Import</button>
@@ -75,15 +119,25 @@
 
 <section id="library" class="tab" role="tabpanel">
   <div class="toolbar">
+    <div class="seg zoomlevel" id="zoomLevel" role="group" aria-label="Zoom level">
+      <button data-zoom="years">Years</button>
+      <button data-zoom="months">Months</button>
+      <button data-zoom="days" aria-pressed="true">Days</button>
+      <button data-zoom="all">All</button>
+    </div>
     <select id="filter" aria-label="Show" title="Cycle All, Picks and Collection (O); toggle Picks (F)" aria-keyshortcuts="O F">
-      <option value="all">All photos</option>
+      <option value="all">Photos and videos</option>
       <option value="picks">Picks (F)</option>
+      <option value="photos">Photos only</option>
+      <option value="videos">Videos only</option>
+      <option value="rejects">Marked for deletion</option>
       <option value="post" hidden></option>
     </select>
     <label class="zoom">Size <kbd>−</kbd>
       <input type="range" id="zoom" min="70" max="360" step="10" value="120" aria-label="Thumbnail size">
       <kbd>+</kbd></label>
     <span class="chosen-n" id="chosenN" hidden></span>
+    <button id="trashMarked" class="danger" hidden title="Move every marked photo and video to the Trash (Put Back restores them)">Move to Trash…</button>
     <button id="loupeBtn" aria-pressed="true">Preview <kbd>E</kbd></button>
     <span class="colctl">
       <label for="target">Collection</label>
@@ -91,22 +145,27 @@
       <button id="newCol" title="New collection">New</button>
       <button id="renameCol" title="Rename the target collection">Rename</button>
       <button id="deleteCol" title="Delete the target collection (photos stay)">Delete</button>
+      <button id="addPicks" data-hotkey="⇧S" title="Add every picked photo and video here to the collection (⇧S)">Add picks</button>
     </span>
     <details class="shortcut-help">
       <summary>Shortcuts</summary>
       <div class="shortcut-list">
         <kbd>H J K L / arrows</kbd><span>Move between photos</span>
-        <kbd>Space</kbd><span>Pick / unpick</span>
+        <kbd>P / X</kbd><span>Pick / unpick a photo or video</span>
         <kbd>S</kbd><span>Add to / remove from collection</span>
+        <kbd>⇧S</kbd><span>Add all picks here to the collection</span>
+        <kbd>⌫ / Z</kbd><span>Mark / unmark for deletion</span>
         <kbd>O</kbd><span>Cycle All / Picks / Collection</span>
         <kbd>[ ] / drag</kbd><span>Reorder collection</span>
-        <kbd>G / D / P</kbd><span>Library / Develop / Post</span>
+        <kbd>G / D / ⇧P / T</kbd><span>Library / Develop / Post / Videos</span>
         <kbd>I / V</kbd><span>Inspect at 1:1 / highlight fine edges</span>
+        <kbd>Space / Enter</kbd><span>Play / pause a video</span>
       </div>
     </details>
   </div>
   <div class="lib">
     <main id="list" class="grid"></main>
+    <div class="split v" data-split="library" role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
     <aside class="loupe" id="loupe">
       <div class="loupe-stage" id="loupeStage">
         <canvas id="loupeView" role="button" tabindex="0" aria-label="Photo preview. Click to zoom in; drag to pan when zoomed."></canvas>
@@ -124,19 +183,176 @@
           <canvas id="loupeMap"></canvas><span id="loupeMapBox"></span>
         </button>
       </div>
+      <div class="loupe-clip" id="loupeClip" hidden></div>
       <div class="loupe-bar">
         <span class="name" id="loupeName"></span>
         <span id="loupeTime"></span>
         <span class="tag" id="loupeTag"></span>
-        <button id="loupePick" data-hotkey="Space" aria-keyshortcuts="Space">☆ Pick</button>
+        <button id="loupePick" data-hotkey="P" aria-keyshortcuts="P X">☆ Pick</button>
         <button id="loupeSel" data-hotkey="S" aria-keyshortcuts="S" hidden>Add to collection</button>
         <button id="loupeSync" data-hotkey="⌘⇧S" aria-keyshortcuts="Meta+Shift+S Control+Shift+S" hidden title="Copy this frame's look and settings to every chosen frame (⌘⇧S)"></button>
         <button id="loupeDev" data-hotkey="D" aria-keyshortcuts="D">Develop</button>
+        <button id="loupeOpen" hidden title="Open in the default video player">Open</button>
         <button id="loupeFs" data-hotkey="⇧F" aria-keyshortcuts="Shift+F" title="Fullscreen (⇧F)" aria-label="Fullscreen">⤢</button>
       </div>
     </aside>
   </div>
 </section>
+
+<section id="videos" class="tab" role="tabpanel" hidden>
+  <div class="cut-bar">
+    <select id="cutPick" aria-label="Cut"></select>
+    <button id="cutNew">+ New cut</button>
+    <div class="cut-title"><strong id="cutName">No cut yet</strong><span class="hint"><span id="cutStats"></span> · <span id="cutState">saved</span></span></div>
+    <button id="cutRename">Rename</button>
+    <span class="push-right"></span>
+    <button id="cutTitleBtn" title="Add a title at the playhead (T)">+ Title</button>
+    <button id="cutMusicBtn" title="Music and sound levels">♪ Music</button>
+    <button id="cutLog" aria-pressed="true" title="Convert S-Log3 clips to display gamma in the export (approximate, not a grade)">Log → Rec.709</button>
+    <button id="cutExport" class="primary">Export…</button>
+  </div>
+  <div class="toolbar">
+    <select id="vidScope" aria-label="Which videos">
+      <option value="day">This day</option>
+      <option value="all">All days</option>
+    </select>
+    <select id="vidFilter" aria-label="Show" title="Toggle Picks (F)">
+      <option value="all">All clips</option>
+      <option value="picks">Picks (F)</option>
+    </select>
+    <span class="hint" id="vidCount"></span>
+    <details class="shortcut-help">
+      <summary>Shortcuts</summary>
+      <div class="shortcut-list">
+        <kbd>H J K L / arrows</kbd><span>Move between clips</span>
+        <kbd>Space / Enter</kbd><span>Play / pause</span>
+        <kbd>, .</kbd><span>Step one frame back / forward</span>
+        <kbd>P / X</kbd><span>Pick / unpick</span>
+        <kbd>⌫ / Z</kbd><span>Mark / unmark for deletion</span>
+        <kbd>F</kbd><span>Show picks only</span>
+        <kbd>I / O</kbd><span>Mark the source clip's in / out</span>
+        <kbd>E</kbd><span>Add the marked range to the cut</span>
+        <kbd>B</kbd><span>Split at the playhead</span>
+        <kbd>C / ⇧C</kbd><span>Crossfade → dip → cut / longer transition</span>
+        <kbd>M</kbd><span>Slow motion (120p clips play at 24p)</span>
+        <kbd>T</kbd><span>Add a title at the playhead</span>
+        <kbd>⌫</kbd><span>Delete the selected timeline clip (ripple)</span>
+        <kbd>← → (timeline)</kbd><span>Move the playhead a frame (⇧: a second)</span>
+        <kbd>⌘Z / ⇧⌘Z</kbd><span>Undo / redo</span>
+        <kbd>R</kbd><span>Reveal in Finder</span>
+        <kbd>G / D / ⇧P / T</kbd><span>Library / Develop / Post / Cut</span>
+      </div>
+    </details>
+  </div>
+  <div class="lib with-loupe">
+    <main id="vidList" class="grid"></main>
+    <div class="split v" data-split="cut" role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
+    <aside class="loupe">
+      <div class="loupe-stage vid-stage" id="vidStage">
+        <video id="vidPlayer" playsinline preload="auto"></video>
+        <video id="vidPlayer2" class="standby" playsinline preload="auto"></video>
+        <div class="cut-overlay" id="cutTitle" hidden></div>
+        <canvas id="vidGL" hidden></canvas>
+      </div>
+      <div class="vid-controls" id="vidBar">
+        <button id="vidPlay" aria-label="Play" title="Play / pause (Space)">▶</button>
+        <input type="range" id="vidSeek" min="0" max="0" step="0.01" value="0" aria-label="Position">
+        <span class="hint" id="vidClock">0:00 / 0:00</span>
+        <select id="vidRate" aria-label="Speed" title="Playback speed">
+          <option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option>
+        </select>
+        <button id="vidMute" aria-label="Mute">🔊</button>
+        <button id="vidFs" aria-label="Fullscreen" title="Fullscreen">⤢</button>
+      </div>
+      <div class="loupe-bar">
+        <span class="name" id="vidName"></span>
+        <span id="vidTime"></span>
+        <span class="vid-meta" id="vidMeta"></span>
+        <button id="vidLog" aria-pressed="true" hidden title="Show log footage with an approximate display conversion (viewing only, not a grade)">Log preview</button>
+        <button id="vidPick" data-hotkey="P">☆ Pick</button>
+        <button id="vidOpen" data-hotkey="O" title="Open in the default video player">Open</button>
+        <button id="vidReveal" data-hotkey="R" title="Reveal in Finder">Reveal</button>
+      </div>
+      <div class="empty" id="vidEmpty" hidden>No clip selected.</div>
+    </aside>
+  </div>
+  <div class="split h" data-split="timeline" role="separator" aria-orientation="horizontal" title="Drag to resize · double-click to reset"></div>
+  <div class="cut-timeline" id="cutTrack">
+    <div class="cut-transport">
+      <button id="cutPlay" aria-label="Play the cut" title="Play the cut (Space in timeline)">▶</button>
+      <span class="cut-mode source" id="cutMode">Source</span>
+      <span class="hint mono" id="cutTime">0:00 / 0:00</span>
+      <span class="hint" id="cutMarks"></span>
+      <span class="push-right"></span>
+      <label class="cut-speed" title="Speed of the selected clip (M toggles slow motion)">Speed
+        <select id="cutSpeed" disabled>
+          <option value="1">100%</option><option value="0.5">50%</option><option value="0.4">40%</option>
+          <option value="0.25">25%</option><option value="slow">120p → 24p</option><option value="0.1">10%</option>
+          <option value="2">200%</option><option value="4">400%</option><option value="custom">Custom…</option>
+        </select></label>
+      <button id="cutZoomOut" aria-label="Zoom out the timeline">−</button>
+      <button id="cutZoomIn" aria-label="Zoom in the timeline">+</button>
+      <audio id="cutMusic" preload="auto"></audio>
+    </div>
+    <div class="cut-area" id="cutTrackArea">
+      <div class="cut-lanes" id="cutLanes">
+        <div class="cut-ruler" id="cutRuler"></div>
+        <div class="cut-titles" id="cutTitles"></div>
+        <div class="cut-blocks" id="cutBlocks"></div>
+        <div class="cut-music" id="cutMusicLane" title="Music: click to change"></div>
+        <div class="cut-head" id="cutHead"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="collections" class="tab" role="tabpanel" hidden>
+  <div class="toolbar">
+    <div class="seg" id="colKind" role="group" aria-label="Kind">
+      <button data-kind="" aria-pressed="true">All</button>
+      <button data-kind="trip">Trips</button>
+      <button data-kind="post">Posts</button>
+      <button data-kind="set">Sets</button>
+    </div>
+    <span class="hint">Dated by the day you set, else the latest day they cover</span>
+    <button id="newCol2" class="primary push-right">+ New collection</button>
+  </div>
+  <main id="colGrid" class="col-grid"></main>
+</section>
+
+<dialog id="cutMusicDlg" aria-labelledby="cutMusicTitle">
+  <h2 id="cutMusicTitle">Music and sound</h2>
+  <div class="music-form">
+    <label>Song <select id="musicFile"></select></label>
+    <label class="upload">Add a song… <input type="file" id="musicUpload" accept=".mp3,.m4a,.aac,.wav,.aif,.aiff,.flac,audio/*"></label>
+    <label>Start the song at (seconds) <input type="number" id="musicStart" min="0" step="0.5" value="0"></label>
+    <label>Music level <input type="range" id="musicGain" min="-40" max="6" step="1" value="-12"> <span id="musicGainV" class="hint"></span></label>
+    <label>Fade in and out (seconds) <input type="number" id="musicFade" min="0" max="30" step="0.5" value="1.5"></label>
+    <label>Clips' own sound <input type="range" id="clipGain" min="-40" max="6" step="1" value="0"> <span id="clipGainV" class="hint"></span></label>
+  </div>
+  <div class="hint" id="musicNow"></div>
+  <p class="hint">Songs are copied into the library's music folder. Slow-motion clips are silent.</p>
+  <div class="dlg-actions">
+    <button id="musicClose">Cancel</button>
+    <button id="musicSave" class="primary">Done</button>
+  </div>
+</dialog>
+
+<dialog id="cutExportDlg" aria-labelledby="cutExportTitle">
+  <h2 id="cutExportTitle">Export <span id="cutExportName"></span></h2>
+  <div class="cut-export-opts">
+    <label>Size <select id="cutExportSize"><option value="1080" selected>1080p</option><option value="2160">4K (2160p)</option><option value="720">720p</option><option value="source">Source</option></select></label>
+    <label>Codec <select id="cutExportCodec"><option value="h264" selected>H.264</option><option value="hevc">HEVC</option></select></label>
+  </div>
+  <progress id="cutExportBar" max="1" value="0"></progress>
+  <div class="hint" id="cutExportNow"></div>
+  <p class="hint">Renders to the library's export/cuts folder.</p>
+  <div class="dlg-actions">
+    <button id="cutExportReveal" hidden>Reveal in Finder</button>
+    <button id="cutExportClose">Close</button>
+    <button id="cutExportGo" class="primary">Export</button>
+  </div>
+</dialog>
 
 <section id="develop" class="tab" role="tabpanel" hidden>
   <div class="dev">
@@ -183,6 +399,7 @@
       <div class="badge right" id="maskOffBadge" hidden>Masks hidden</div>
       <div class="empty" id="devEmpty" hidden>Pick a frame in the Library, or choose one below.</div>
     </div>
+    <div class="split v dev-split" data-split="develop" role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
     <aside class="panel" id="panel">
       <div class="scope" id="scope">
         <canvas id="hist" width="256" height="80" aria-label="Histogram" title="Click to show clipping on the photo (C)"></canvas>
@@ -229,7 +446,7 @@
       </div>
       <div class="row">
         <button id="gridBtn" data-hotkey="O" aria-keyshortcuts="O" aria-pressed="false" title="Cycle grid overlay (O)">Grid: off</button>
-        <button id="crossBtn" data-hotkey="X" aria-keyshortcuts="X" aria-pressed="false" title="Centre crosshair (X)">Crosshair</button>
+        <button id="crossBtn" data-hotkey="⇧X" aria-keyshortcuts="Shift+X" aria-pressed="false" title="Centre crosshair (⇧X)">Crosshair</button>
       </div>
       <label class="check"><input type="checkbox" id="lensOn"> Lens profile <span id="lensInfo"></span></label>
       <div id="sliders-geo"></div>
@@ -324,7 +541,7 @@
         <button id="dSend" title="Export, then send to this destination">Send to</button>
         <select id="dDevice" aria-label="Send destination"></select>
       </div>
-      <p class="hint">O grid · X crosshair · M mask overlay · C clipping · ⇧M all masks · \ before/after · H/L or ←/→ frames · +/− zoom · 0 fit · ⌘Z undo · double-click a slider to reset it</p>
+      <p class="hint">O grid · P pick · ⇧X crosshair · M mask overlay · C clipping · ⇧M all masks · \ before/after · H/L or ←/→ frames · +/− zoom · 0 fit · ⌘Z undo · double-click a slider to reset it</p>
     </aside>
     <div class="strip" id="strip"></div>
   </div>
@@ -369,7 +586,7 @@
 
       <div class="row">
         <button id="pGrid" data-hotkey="O" aria-keyshortcuts="O" aria-pressed="false" title="Grid in each tile (O)">Grid: off</button>
-        <button id="pCross" data-hotkey="X" aria-keyshortcuts="X" aria-pressed="false" title="Crosshair in each tile (X)">Crosshair</button>
+        <button id="pCross" data-hotkey="⇧X" aria-keyshortcuts="Shift+X" aria-pressed="false" title="Crosshair in each tile (⇧X)">Crosshair</button>
       </div>
 
       <h3 id="slideTitle">Slide</h3>
@@ -411,6 +628,8 @@
   </div>
 </div>
 
+</div>
+</div>
 <script type="module" src="/app.js"></script>
 </body>
 </html>

@@ -46,6 +46,20 @@ photos into slides. The app reloads code changes and watches recipes/proposals
 for live updates; revision checks prevent stale saves from silently overwriting
 newer work.
 
+### Mac app
+
+`macos/build.sh` builds `dist/Framewright.app` (`--install` copies it to
+/Applications). It needs the Xcode command line tools and runs the bundled
+package with your Python 3.10+, in its own window on a private port. It adds
+File ▸ Import from Card (⌘I), ⌘1–4 for the tabs, Dock progress and a
+notification when an import finishes, keeps the Mac awake while importing,
+and asks before quitting mid-import. Closing the window keeps it running.
+
+For working on Framewright itself, `macos/build.sh --dev --install` builds an
+app that runs this checkout live instead of a bundled copy: saving Python
+code restarts the server and saving page code reloads the window, as with
+`python -m framewright`. Rebuild only after changing `macos/` itself.
+
 ## Settings and storage
 
 Library selection is `--library`, then `$STUDIO_LIBRARY`, then saved config.
@@ -110,6 +124,31 @@ posts/<collection>/NN.jpg           exported post slides
 ## Import and send
 
 Connect a card with DCIM, or a Sony M4ROOT/CLIP layout, to use **Import**.
+One click copies everything new, straight to the store when it is plugged in;
+the button shows progress, speed and time left. Cards from several cameras
+can be connected at once and import together, each camera's day into its own
+shoot. The dialog (right-click the button, or click it while importing)
+offers importing automatically when a card connects and ejecting afterwards.
+
+The **Library** shows every photo and clip, newest day first, under month and
+day headings; **Years** and **Months** zoom out to cover cards, and each day has
+Select and Add to collection. **Collections** shows every collection as a card,
+dated by the date you set on it or else the latest day it covers. The header
+switches workspaces: Library, Develop (photos) and Cut (video; Enter on a clip).
+After an import, **Check before formatting** re-reads every library copy of
+the card's photos and clips and says whether it's safe to format the card in
+the camera (Framewright never erases a card; the camera sets up its own
+database when it formats). **Rename** names the card itself. **Cut** assembles clips into an edit saved as `<library>/cuts/<name>.cut.json`: mark a clip's in and out with I and O, press E to add it, drag to reorder or trim, B splits at the playhead, ⌫ removes, ⌘Z undoes, and **Export…** renders an MP4 to `export/cuts/` with ffmpeg (S-Log3 converted to Rec.709 when on). Preview plays gaplessly by priming the next clip in a second player. C adds a crossfade into the selected clip (again for a dip to black, ⇧C for longer), M plays a 120p clip as 24p slow motion (the Speed menu has more presets and a custom percent), drag the ruler to scrub, T adds a title at the playhead (drag to move, double-click to edit), and ♪ Music adds a song from the library's music folder with its level, fades and the clips' own level. Its clip bin lists a day's clips with a player (Space plays, P picks, `,`/`.` step frames), and
+Open/Reveal hand a clip to QuickTime or Finder. With ffmpeg installed, clips
+get poster frames and 540p preview copies (made in the background); the player shows the original and switches to the copy only while you scrub; S-Log clips show through an approximate display conversion
+(viewing only, toggle with **Log preview**). An SSD or Mac tag on each item
+says whether its file is on the store or in the library.
+
+P (or X) picks a photo or video and ⌫ (or Z) marks it for deletion; marked
+items dim, and the **Marked for deletion** filter has **Move to Trash…** for
+when space runs low (files go to the Trash, so Finder can put them back). S
+adds the selected photo or clip to the target collection and **Add picks**
+(⇧S) adds every pick in view. A post's slides use the collection's photos.
 Windows detection checks removable drive types. CLI import can also read any
 explicit source folder:
 

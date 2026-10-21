@@ -65,6 +65,7 @@ Stdlib only, no venv needed.
 from __future__ import annotations
 
 import argparse
+import glob
 import hashlib
 import json
 import struct
@@ -81,7 +82,7 @@ from datetime import datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .luts import HASH_PATTERN, LUT_SUFFIXES, MAX_LUT_BYTES, install_lut, lut_hash, valid_name
 from .photo_index import PhotoIndex
@@ -92,7 +93,8 @@ from .import_photos import (  # noqa: E402
     JPEG_EXTS,
     RAW_EXTS,
     ImportError_,
-    find_card,
+    find_cards,
+    card_label,
     delete_verified_source,
     frame_key,
     offload_file,
@@ -100,7 +102,10 @@ from .import_photos import (  # noqa: E402
     place,
     plan,
 )
-from .store import drive_name, read_manifest, store_mounted, stored  # noqa: E402
+from .store import drive_name, forget, read_manifest, store_mounted, stored  # noqa: E402
+from .trash import to_trash  # noqa: E402
+from . import clips  # noqa: E402
+from . import cuts  # noqa: E402
 from .settings import configured_port, configured_store, resolve_library, save_library, load_config, import_settings  # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "web"
@@ -111,6 +116,7 @@ STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript",
 PREVIEW_PX = 2000
 THUMB_PX = 480
 PICKS_FILE = "picks.txt"
+REJECTS_FILE = "rejects.txt"   # marked for deletion
 PREVIEW_DIR = ".preview"
 EXPORT_DIR = "export"
 EDIT_SUFFIX = ".edit.json"
@@ -209,7 +215,14 @@ MASK_RANGES = {
 # one knows the server code changed under it.
 BOOT_ID = uuid.uuid4().hex[:8]
 HERE = Path(__file__).resolve().parent
-SERVER_CODE = (HERE / "server.py", HERE / "lenses.py", HERE / "import_photos.py", HERE / "store.py", HERE / "settings.py")
+SERVER_CODE = (HERE / "server.py", HERE / "lenses.py", HERE / "import_photos.py", HERE / "store.py", HERE / "settings.py",
+               HERE / "clips.py", HERE / "cuts.py", HERE / "trash.py")
+
+
+def code_version() -> str:
+    """'<boot id> <page code fingerprint>': changes with new server or page code."""
+    page = hashlib.sha1(json.dumps(sorted(mtimes(STATIC.iterdir()).items())).encode()).hexdigest()[:12]
+    return f"{BOOT_ID} {page}"
 
 
 def mtimes(paths) -> dict[str, float]:
@@ -268,6 +281,12 @@ def shot_time(src: Path, shoot_dir: Path) -> float:
         return stored(shoot_dir).get(src.name, (src, 0.0))[1]
 
 
+def where(src: Path) -> str:
+    """"store" for a file on the external drive, "local" for one in the library."""
+    root = configured_store()
+    return "store" if root is not None and src.is_relative_to(root) else "local"
+
+
 def offline(src: Path) -> str:
     """Why an image can't be read, for a frame whose file is on an unplugged drive."""
     return f"{drive_name()} is not plugged in" if not store_mounted() else f"{src.name} is missing from {drive_name()}"
@@ -286,11 +305,11 @@ def shoot_date(name: str) -> str:
 
 
 def list_shoots(root: Path) -> list[str]:
-    """Shoot folders holding at least one image, newest first."""
+    """Shoot folders holding at least one image or clip, newest first."""
     shoots = [
         d.name for d in root.iterdir()
         if d.is_dir() and (d / "raw").is_dir()
-        and (photo_snapshot(d).sources or read_manifest(d))
+        and (photo_snapshot(d).sources or read_manifest(d) or clips.has_clips(d))
     ]
     _photo_index.retain(root, shoots)
     return sorted(shoots, key=lambda name: (shoot_date(name), name), reverse=True)
@@ -324,16 +343,16 @@ def atomic_write(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
-def read_picks(shoot_dir: Path) -> set[str]:
-    path = shoot_dir / PICKS_FILE
+def read_picks(shoot_dir: Path, name: str = PICKS_FILE) -> set[str]:
+    path = shoot_dir / name
     if not path.is_file():
         return set()
     return {line.strip() for line in path.read_text().splitlines() if line.strip()}
 
 
-def write_picks(shoot_dir: Path, picks: set[str]) -> None:
-    """Replace picks.txt, or remove it once nothing is picked."""
-    path = shoot_dir / PICKS_FILE
+def write_picks(shoot_dir: Path, picks: set[str], name: str = PICKS_FILE) -> None:
+    """Replace picks.txt (or rejects.txt), or remove it once it would be empty."""
+    path = shoot_dir / name
     if not picks:
         path.unlink(missing_ok=True)
         return
@@ -554,6 +573,16 @@ def find_collection(collections: list[dict], slug: str) -> dict | None:
     return next((c for c in collections if slugify(c["name"]) == slug), None)
 
 
+def collection_date(c: dict) -> str:
+    """A collection's date: the one set on it, else the latest day it covers
+    (its range's end, else its newest item's day)."""
+    if c.get("date"):
+        return c["date"]
+    if c.get("days"):
+        return c["days"]["to"]
+    return max((shoot_date(ref.partition("/")[0]) for ref in c.get("items", [])), default="")
+
+
 def collection_shoots(root: Path, c: dict) -> list[str]:
     """Shoots inside the collection's date range, oldest first."""
     days = c.get("days")
@@ -620,6 +649,16 @@ def clean_name(name: object) -> str:
     if not isinstance(name, str) or not slugify(name):
         raise ValueError("a collection needs a name with a letter or digit in it")
     return name.strip()[:80]
+
+
+def clean_date(value: object) -> str | None:
+    """A collection's own date, YYYY-MM-DD, or None to go back to the derived one."""
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise ValueError("date must be YYYY-MM-DD")
+    datetime.strptime(value, "%Y-%m-%d")
+    return value
 
 
 def clean_days(body: dict) -> dict | None:
@@ -930,6 +969,16 @@ def thumb(src: Path, shoot_dir: Path) -> Path:
         return out
 
 
+EDIT_HASH = re.compile(r"^[0-9a-z]{1,16}$")
+
+
+def edited_thumb(shoot_dir: Path, key: str, edit_hash: str) -> Path | None:
+    """Where the page's render of an edited frame's tile is kept, or None."""
+    if not EDIT_HASH.match(edit_hash or ""):
+        return None
+    return shoot_dir / PREVIEW_DIR / "edited" / f"{key}.{edit_hash}.jpg"
+
+
 def warm_previews(root: Path, shoot: str) -> None:
     """Render a shoot's thumbnails and previews in the background.
 
@@ -953,44 +1002,91 @@ _import_lock = threading.Lock()
 _import: dict = {"running": False}
 
 
-def plugged_card() -> Path | None:
-    """The one plugged-in card, or None (no card, or more than one)."""
+def plugged_cards() -> list[Path]:
+    """Every plugged-in camera card, possibly from several cameras."""
     try:
-        return find_card()
+        return find_cards()
     except ImportError_:
-        return None
+        return []
 
 
-def card_plan(root: Path, card: Path, jpeg_only: bool) -> dict[Path, list[Path]]:
-    """What importing card would copy; empty when nothing on it is new."""
-    try:
-        return plan(card, root, None, None, False, jpeg_only=jpeg_only)
-    except ImportError_ as exc:
-        if str(exc).startswith("no media files"):
-            return {}
-        raise
+_volume_info: dict[str, dict | None] = {}
 
 
-def describe_plan(root: Path, by_dest: dict[Path, list[Path]]) -> list[dict]:
+def empty_cards() -> list[Path]:
+    """Freshly formatted cards: removable FAT/exFAT volumes holding nothing yet.
+
+    They have no DCIM or M4ROOT until a camera writes them, so find_cards
+    can't see them, but they can still be renamed or ejected. macOS only;
+    diskutil is asked once per mounted volume.
+    """
+    if sys.platform != "darwin":
+        return []
+    found = []
+    for vol in Path("/Volumes").iterdir():
+        try:
+            if not vol.is_dir() or any(not e.name.startswith(".") for e in vol.iterdir()):
+                continue
+        except OSError:
+            continue
+        key = str(vol)
+        if key not in _volume_info:
+            try:
+                _volume_info[key] = card_volume(vol)
+            except (ValueError, OSError, subprocess.SubprocessError):
+                _volume_info[key] = None
+        if _volume_info[key]:
+            found.append(vol)
+    return found
+
+
+def card_plan(root: Path, cards: list[Path], jpeg_only: bool, strict: bool = False) -> dict[Path, list[Path]]:
+    """What importing the cards would copy; empty when nothing on them is new.
+    strict re-hashes every file against its copy (slow; for erasing a card)."""
+    by_dest: dict[Path, list[Path]] = {}
+    for card in cards:
+        try:
+            planned = plan(card, root, None, None, False, jpeg_only=jpeg_only, strict=strict)
+        except ImportError_ as exc:
+            if str(exc).startswith("no media files"):
+                continue
+            raise
+        for dest, files in planned.items():
+            by_dest.setdefault(dest, []).extend(files)
+    return by_dest
+
+
+def describe_plan(root: Path, by_dest: dict[Path, list[Path]], cards: list[Path] | None = None) -> list[dict]:
+    def card_of(f: Path) -> str:
+        return next((c.name for c in cards or [] if f.is_relative_to(c)), "")
+    groups: dict[tuple[Path, str], list[Path]] = {}
+    for dest, files in by_dest.items():
+        for f in files:
+            groups.setdefault((dest, card_of(f)), []).append(f)
     return [
-        {"shoot": dest.parent.name, "kind": dest.name,
+        {"shoot": dest.parent.name, "kind": dest.name, "card": card,
          "frames": len({frame_key(f) for f in files}), "files": len(files),
          "mb": round(sum(f.stat().st_size for f in files) / (1024 * 1024), 1)}
-        for dest, files in sorted(by_dest.items())
+        for (dest, card), files in sorted(groups.items())
     ]
 
 
-def run_import(root: Path, card: Path, jpeg_only: bool, delete_from_card: bool = False) -> None:
-    """Copy everything new off card, updating _import as it goes. Images go
-    to the external store when it is plugged in (store.py)."""
+def run_import(root: Path, cards: list[Path], jpeg_only: bool, delete_from_card: bool = False) -> None:
+    """Copy everything new off the cards, updating _import as it goes. Images
+    go to the external store when it is plugged in (store.py)."""
     state = _import
     try:
-        by_dest = card_plan(root, card, jpeg_only)
+        state["phase"] = "checking"
+        by_dest = card_plan(root, cards, jpeg_only)
+        state["phase"] = "copying"
         files = [(dest, f) for dest, fs in sorted(by_dest.items()) for f in fs]
         to_store = store_mounted()
         state.update(total=len(files), bytes_total=sum(f.stat().st_size for _, f in files),
-                     groups=describe_plan(root, by_dest), to=drive_name() if to_store else "the library")
+                     groups=describe_plan(root, by_dest, cards), to=drive_name() if to_store else "the library")
         for dest, src in files:
+            if state.get("cancel"):
+                state["canceled"] = True
+                return      # between files: everything copied so far is verified and kept
             state["current"] = src.name
             size = src.stat().st_size
             place(src, dest, to_store)
@@ -1057,6 +1153,80 @@ def run_offload(root: Path, shoots: list[str]) -> None:
         state["current"] = None
 
 
+# --- checking a card before formatting it ------------------------------------------
+#
+# The camera formats the card (it sets up its own database there), so
+# Framewright never erases one. Before you do, Check re-reads every library
+# copy of the card's photos and clips: a store copy must hash to the
+# fingerprint taken from the card at import. It ends in "safe to format" or a
+# count of what isn't in the library yet.
+
+_verify: dict = {"running": False}
+_cut_export: dict = {"running": False}
+
+
+def card_volume(card: Path) -> dict:
+    """diskutil's facts about the card's volume, refusing anything but an
+    external, removable volume mounted exactly at the card."""
+    import plistlib
+    result = subprocess.run(["diskutil", "info", "-plist", str(card)], capture_output=True, timeout=30)
+    if result.returncode:
+        raise ValueError(f"couldn't read {card.name}: {result.stderr.decode(errors='replace').strip()}")
+    info = plistlib.loads(result.stdout)
+    if info.get("Internal") is not False or not (info.get("RemovableMedia") or info.get("Ejectable")):
+        raise ValueError(f"{card.name} is not a removable card; refusing to format it")
+    if Path(info.get("MountPoint", "")) != card:
+        raise ValueError(f"{card.name} is not mounted where expected; refusing to format it")
+    store = configured_store()
+    if store is not None and (store == card or card in store.parents):
+        raise ValueError(f"{card.name} holds the photo store; refusing to format it")
+    if info.get("FilesystemType") not in ("exfat", "msdos"):
+        raise ValueError(f"{card.name} uses {info.get('FilesystemType')}; format it in the camera instead")
+    return info
+
+
+CARD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,10}$")
+
+
+def clean_card_name(name: object) -> str:
+    """A volume name every camera and computer reads: 11 plain characters."""
+    if not isinstance(name, str) or not CARD_NAME.match(name.strip()):
+        raise ValueError("a card name is 1–11 letters, digits, spaces, - or _")
+    return name.strip()
+
+
+def rename_card(card: Path, name: str) -> None:
+    info = card_volume(card)
+    if info["FilesystemType"] == "msdos":
+        name = name.upper()
+    result = subprocess.run(["diskutil", "rename", info["DeviceIdentifier"], name], capture_output=True, text=True, timeout=60)
+    if result.returncode:
+        raise ValueError((result.stderr or result.stdout).strip() or "diskutil couldn't rename the card")
+
+
+def run_verify(root: Path, card: Path) -> None:
+    state = _verify
+    try:
+        from . import import_photos
+        media = [f for d in import_photos.media_dirs(card) for f in d.rglob("*")
+                 if f.is_file() and import_photos.is_media(f)]
+        state.update(bytes=0, bytes_total=sum(f.stat().st_size for f in media), files=len(media))
+
+        def progress(n: int) -> None:
+            state["bytes"] = state.get("bytes", 0) + n
+        import_photos.HASH_PROGRESS = progress
+        try:
+            pending = card_plan(root, [card], False, strict=True)
+        finally:
+            import_photos.HASH_PROGRESS = None
+        state["missing"] = sum(len(v) for v in pending.values())
+        state["safe"] = not pending and bool(media)
+    except (ImportError_, OSError, ValueError) as exc:
+        state["error"] = str(exc)
+    finally:
+        state["running"] = False
+
+
 def eject(card: Path) -> str | None:
     """Unmount the card so it can be pulled; an error message, or None."""
     if sys.platform != "darwin":
@@ -1092,7 +1262,8 @@ class Handler(BaseHTTPRequestHandler):
             path = urlparse(self.path).path
             expected = {
                 "/api/luts/install": "application/octet-stream",
-                "/api/export": "image/jpeg", "/api/post-export": "image/jpeg",
+                "/api/music/upload": "application/octet-stream",
+                "/api/export": "image/jpeg", "/api/post-export": "image/jpeg", "/api/editthumb": "image/jpeg",
                 "/headless/result": "image/jpeg", "/headless/error": "text/plain",
             }.get(path, "application/json" if path.startswith("/api/") else None)
             types = self.headers.get_all("Content-Type", [])
@@ -1105,6 +1276,8 @@ class Handler(BaseHTTPRequestHandler):
     root: Path | None = None
     setup_token = uuid.uuid4().hex
     warmed: set[str] = set()
+    warmed_clips: set[str] = set()
+    warmed_all = False
 
     def log_message(self, fmt: str, *args) -> None:  # quiet
         pass
@@ -1167,7 +1340,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if not parts or (len(parts) == 1 and parts[0] in {p.name for p in STATIC.iterdir()}):
             path = STATIC / (parts[0] if parts else "index.html")
-            self.send_bytes(path.read_bytes(), STATIC_TYPES.get(path.suffix, "text/plain"))
+            # no-store: the Mac app's web view otherwise reused stale page
+            # code across hot reloads.
+            self.send_bytes(path.read_bytes(), STATIC_TYPES.get(path.suffix, "text/plain"), "no-store")
             return
 
         if parts[0] == "vendor":
@@ -1191,6 +1366,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, offline(src))
                 return
             self.send_bytes(src.read_bytes(), "application/octet-stream", "max-age=3600")
+            return
+
+        if parts == ["api", "version"]:
+            # Polled by the page as a fallback to the event stream.
+            self.send_json({"version": code_version()})
             return
 
         if parts == ["api", "events"]:
@@ -1217,17 +1397,38 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({
                 "shoots": shoots,
                 "shootCounts": {shoot: len(frame_sources(self.root / shoot)) for shoot in shoots},
-                "collections": [
+                "clipCounts": {shoot: n for shoot in shoots if (n := len(clips.clip_files(self.root / shoot)))},
+                "store": drive_name() if configured_store() else None,
+                "storeMounted": store_mounted(),
+                "storeFree": shutil.disk_usage(configured_store()).free if store_mounted() else None,
+                "collections": sorted((
                     {"name": c["name"], "slug": slugify(c["name"]), "days": c.get("days"),
-                     "shoots": collection_shoots(self.root, c), "items": len(c.get("items", []))}
+                     "date": collection_date(c), "dateSet": bool(c.get("date")),
+                     "shoots": collection_shoots(self.root, c), "items": len(c.get("items", [])),
+                     **self.collection_summary(c)}
                     for c in collections
-                ],
+                ), key=lambda c: (c["date"], c["name"].lower()), reverse=True),
             })
             return
 
         if parts == ["api", "frames"]:
             if "collection" in query:
                 self.api_collection_frames(query["collection"][0])
+            elif "all" in query:
+                # The whole library, newest day first; thumbnails render as the grid asks.
+                shoots = list_shoots(self.root)
+                frames = [f for shoot in shoots for f in self.shoot_frames(shoot, warm=False)]
+                self.send_json({"name": "Library", "frames": frames})
+                if not Handler.warmed_all:
+                    # Once per launch: missing tiles and posters, newest day first,
+                    # one at a time so the grid's own requests stay quick.
+                    Handler.warmed_all = True
+                    def warm_all(root=self.root, shoots=shoots):
+                        for shoot in shoots:
+                            warm_previews(root, shoot)
+                            clips.warm_posters(root / shoot)
+                            clips.proxies.add(root / shoot, clips.clip_files(root / shoot))
+                    threading.Thread(target=warm_all, daemon=True).start()
             else:
                 self.api_frames(query.get("shoot", [""])[0])
             return
@@ -1255,6 +1456,43 @@ class Handler(BaseHTTPRequestHandler):
 
         if parts == ["api", "import"]:
             self.send_json(dict(_import))
+            return
+
+        if parts == ["api", "cuts"]:
+            self.send_json({"cuts": cuts.list_cuts(self.root)})
+            return
+
+        if parts == ["api", "cut"]:
+            try:
+                cut = cuts.read_cut(self.root, query.get("slug", [""])[0])
+            except ValueError:
+                cut = None
+            if cut is None:
+                self.send_json({"error": "no such cut"}, HTTPStatus.NOT_FOUND)
+                return
+            self.send_json({"cut": cut})
+            return
+
+        if parts == ["api", "music"]:
+            self.send_json({"music": cuts.music_files(self.root)})
+            return
+
+        if len(parts) == 2 and parts[0] == "music":
+            name = parts[1]
+            path = self.root / cuts.MUSIC_DIR / name
+            if not cuts.SAFE.match(name) or path.suffix.lower() not in cuts.MUSIC_EXTS or not path.is_file():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self.send_file(path, {".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
+                                  ".aif": "audio/aiff", ".aiff": "audio/aiff"}.get(path.suffix.lower(), "audio/mp4"))
+            return
+
+        if parts == ["api", "cut", "export"]:
+            self.send_json({k: v for k, v in _cut_export.items() if k != "pid"})
+            return
+
+        if parts == ["api", "card", "verify"]:
+            self.send_json(dict(_verify))
             return
 
         if parts == ["api", "offload"]:
@@ -1299,6 +1537,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "no such collection"}, HTTPStatus.NOT_FOUND)
                 return
             self.send_json({"name": c["name"], "items": c.get("items", []), "post": c.get("post"),
+                            "clipItems": [r for r in c.get("items", []) if self.clip(*r.partition("/")[::2])],
                             "rev": collection_rev(self.root, query.get("slug", [""])[0])})
             return
 
@@ -1348,15 +1587,215 @@ class Handler(BaseHTTPRequestHandler):
             self.send_bytes(path.read_bytes(), "image/jpeg", "max-age=3600")
             return
 
+        if parts == ["api", "clips"]:
+            self.api_clips(query.get("shoot", [""])[0])
+            return
+
+        if len(parts) == 3 and parts[0] == "editthumb":
+            # A grid tile of an edited frame, rendered once by the page and
+            # kept under its edit's hash, so it needn't be rendered again.
+            found = self.frame(parts[1], parts[2].removesuffix(".jpg"))
+            path = edited_thumb(found[0], frame_key(found[1]), query.get("h", [""])[0]) if found else None
+            if path is None or not path.is_file():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self.send_bytes(path.read_bytes(), "image/jpeg", "max-age=86400")
+            return
+
+        if len(parts) == 3 and parts[0] in ("clip", "clipposter"):
+            self.send_clip(parts[0], parts[1], parts[2].removesuffix(".jpg"), query.get("proxy", [""])[0] == "1")
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND)
 
-    def shoot_frames(self, shoot: str) -> list[dict]:
+    def collection_summary(self, c: dict) -> dict:
+        """What a Collections card shows: kind, photo and clip counts, and up
+        to three cover images (its first items, else picks from its days)."""
+        clip_keys: dict[str, set[str]] = {}
+
+        def is_clip(shoot: str, key: str) -> bool:
+            if shoot not in clip_keys:
+                d = self.shoot_dir(shoot)
+                clip_keys[shoot] = set(clips.clip_files(d)) if d else set()
+            return key in clip_keys[shoot]
+
+        def url(shoot: str, key: str) -> str:
+            kind = "clipposter" if is_clip(shoot, key) else "thumb"
+            return f"/{kind}/{quote(shoot)}/{quote(key)}.jpg"
+
+        refs = [r.partition("/")[::2] for r in c.get("items", [])]
+        refs = [(s, k) for s, k in refs if self.shoot_dir(s)]
+        n_clips = sum(1 for s, k in refs if is_clip(s, k))
+        n_photos = len(refs) - n_clips
+        cover = [url(s, k) for s, k in refs[:3]]
+        days = collection_shoots(self.root, c)
+        for shoot in days:
+            d = self.root / shoot
+            in_items = {k for s, k in refs if s == shoot}
+            n_photos += len(set(frame_sources(d)) - in_items)
+            n_clips += len(set(clips.clip_files(d)) - in_items)
+            if len(cover) < 3:
+                keys = sorted(read_picks(d) & set(frame_sources(d))) or sorted(frame_sources(d))
+                cover += [url(shoot, k) for k in keys[:3 - len(cover)]]
+        kind = "trip" if c.get("days") else "post" if c.get("post") else "set"
+        return {"kind": kind, "photos": n_photos, "clips": n_clips, "cover": cover}
+
+    # Videos
+
+    def clip(self, shoot: str, key: str) -> tuple[Path, Path] | None:
+        """(shoot dir, video file) for a clip that exists, else None."""
+        d = self.shoot_dir(shoot)
+        path = clips.clip_files(d).get(key) if d else None
+        return (d, path) if path else None
+
+    def api_clips(self, shoot: str) -> None:
+        """Clips of one shoot, or of every shoot (newest day first) without one."""
+        if shoot:
+            d = self.shoot_dir(shoot)
+            if d is None:
+                self.send_json({"error": "no such shoot"}, HTTPStatus.NOT_FOUND)
+                return
+            dirs = [d]
+        else:
+            dirs = [self.root / s for s in list_shoots(self.root)]
+        out = []
+        for d in dirs:
+            found = clips.list_clips(d, read_picks(d), read_picks(d, REJECTS_FILE))
+            if found:
+                out.append({"shoot": d.name, "clips": found})
+                if d.name not in self.warmed_clips:
+                    self.warmed_clips.add(d.name)
+                    threading.Thread(target=clips.warm_posters, args=(d,), daemon=True).start()
+        self.send_json({"days": out})
+
+    def send_clip(self, kind: str, shoot: str, key: str, proxy: bool = False) -> None:
+        found = self.clip(shoot, key)
+        if not found:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        d, path = found
+        if kind == "clipposter":
+            try:
+                out = clips.poster(d, key)
+            except FileNotFoundError as exc:
+                self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
+                return
+            except (subprocess.SubprocessError, OSError):
+                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "poster failed")
+                return
+            if out is None:
+                self.send_error(HTTPStatus.NOT_FOUND, "install ffmpeg for video posters")
+                return
+            self.send_bytes(out.read_bytes(), "image/jpeg", "max-age=3600")
+            return
+        if proxy:
+            small = clips.proxy_path(d, key)
+            if small.is_file():
+                self.send_file(small, "video/mp4")
+                return
+            clips.proxies.add(d, [key], front=True)    # not made yet: play the original meanwhile
+        if not path.is_file():
+            self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, offline(path))
+            return
+        self.send_file(path, "video/quicktime" if path.suffix.lower() == ".mov" else "video/mp4")
+
+    def send_file(self, path: Path, ctype: str) -> None:
+        """A media file with HTTP ranges, which players need to seek."""
+        size = path.stat().st_size
+        try:
+            span = clips.byte_range(self.headers.get("Range"), size)
+        except ValueError:
+            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.end_headers()
+            return
+        start, end = span or (0, size - 1)
+        self.send_response(HTTPStatus.PARTIAL_CONTENT if span else HTTPStatus.OK)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if span:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        try:
+            with path.open("rb") as handle:
+                handle.seek(start)
+                left = end - start + 1
+                while left > 0:
+                    chunk = handle.read(min(clips.CHUNK, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass    # the player seeked elsewhere and dropped this request
+
+    def media_files(self, shoot_dir: Path, key: str) -> tuple[list[Path], set[str]]:
+        """A frame's or clip's files, in the library and on the store, and
+        the store manifest entries they make up."""
+        files, rels = [], set()
+        for sub in ("raw", "video"):
+            local = shoot_dir / sub
+            if local.is_dir():
+                files += [f for f in local.iterdir() if f.is_file() and frame_key(f) == key]
+            for name, (path, _) in stored(shoot_dir, sub).items():
+                if frame_key(path) == key:
+                    if not path.is_file():
+                        raise ValueError(f"{name} is on {drive_name()}, which is not plugged in")
+                    files.append(path)
+                    rels.add(f"{sub}/{name}")
+        return files, rels
+
+    def api_trash(self, body: dict) -> None:
+        """Move frames and clips to the Trash, with their recipes, and forget them."""
+        refs = body.get("refs")
+        if not isinstance(refs, list) or not refs or not all(isinstance(r, str) for r in refs):
+            raise ValueError("refs must be a non-empty list of shoot/key strings")
+        plan = []
+        for ref in dict.fromkeys(refs):
+            shoot, _, key = ref.partition("/")
+            d = self.shoot_dir(shoot)
+            if d is None or not (self.frame(shoot, key) or self.clip(shoot, key)):
+                self.send_json({"error": f"no such frame: {ref}"}, HTTPStatus.NOT_FOUND)
+                return
+            files, rels = self.media_files(d, key)
+            recipes = [p for p in (edit_path(d, key), proposal_path(d, key)) if p.is_file()]
+            plan.append((d, key, files + recipes, rels))
+        with _write_lock:
+            for d, key, files, rels in plan:
+                to_trash(files, self.root)
+                forget(d, rels)
+                for name in (PICKS_FILE, REJECTS_FILE):
+                    marks = read_picks(d, name)
+                    if key in marks:
+                        marks.discard(key)
+                        write_picks(d, marks, name)
+                for cache in (d / PREVIEW_DIR / f"{key}.jpg", d / PREVIEW_DIR / "thumb" / f"{key}.jpg",
+                              d / PREVIEW_DIR / clips.CLIP_DIR / f"{key}.jpg", d / PREVIEW_DIR / clips.CLIP_DIR / f"{key}.json"):
+                    cache.unlink(missing_ok=True)
+            gone = {f"{d.name}/{key}" for d, key, _, _ in plan}
+            collections = read_collections(self.root)
+            for c in collections:
+                c["items"] = [r for r in c.get("items", []) if r not in gone]
+            write_collections(self.root, collections)
+        self.send_json({"trashed": sorted(gone)})
+
+    def api_clip_action(self, action: str, body: dict) -> None:
+        found = self.clip(str(body.get("shoot", "")), str(body.get("key", "")))
+        if not found:
+            self.send_json({"error": "no such clip"}, HTTPStatus.NOT_FOUND)
+            return
+        clips.reveal(found[1], open_it=action == "open")
+        self.send_json({"ok": True})
+
+    def shoot_frames(self, shoot: str, warm: bool = True) -> list[dict]:
         """Every frame of one shoot, in capture order."""
         d = self.root / shoot
-        if shoot not in self.warmed:
+        if warm and shoot not in self.warmed:
             self.warmed.add(shoot)
             threading.Thread(target=warm_previews, args=(self.root, shoot), daemon=True).start()
-        picks = read_picks(d)
+        picks, rejects = read_picks(d), read_picks(d, REJECTS_FILE)
         snapshot = photo_snapshot(d)
         raws, times = snapshot.raws, snapshot.files
         sources = sorted(snapshot.sources.items(), key=lambda kv: (times[kv[1]], kv[0]))
@@ -1374,11 +1813,13 @@ class Handler(BaseHTTPRequestHandler):
                 "params": recipe(key),     # so thumbnails can show the edit
                 "time": datetime.fromtimestamp(times[src]).strftime("%H:%M:%S"),
                 "picked": key in picks,
+                "rejected": key in rejects,
                 "raw": key in raws,                   # a raw file to develop from
                 "jpeg": src.suffix.lower() in JPEG_EXTS,
                 "edited": edit_path(d, key).is_file(),
                 "proposed": proposal_path(d, key).is_file(),
                 "exported": (d / EXPORT_DIR / f"{key}.jpg").is_file(),
+                "where": where(src),
             }
             for key, src in sources
         ]
@@ -1394,7 +1835,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         try:
-            self.wfile.write(f"retry: 500\nevent: hello\ndata: {BOOT_ID}\n\n".encode())
+            # The boot id and a fingerprint of the page code: a page that
+            # reconnects after missing a change still sees it and reloads.
+            self.wfile.write(f"retry: 500\nevent: hello\ndata: {code_version()}\n\n".encode())
             self.wfile.flush()
             seen = mtimes(STATIC.iterdir())
             quiet = 0.0
@@ -1476,8 +1919,17 @@ class Handler(BaseHTTPRequestHandler):
                 frames.append(by_shoot[shoot][key])
         for f in frames:
             f["selected"] = order.get(f"{f['shoot']}/{f['key']}", 0)
+        # Clips: every clip of the collection's days, then clips added from other days.
+        found = [clip for shoot in days for clip in clips.list_clips(self.root / shoot, read_picks(self.root / shoot), read_picks(self.root / shoot, REJECTS_FILE))]
+        for ref in items:
+            shoot, _, key = ref.partition("/")
+            d = None if shoot in days else self.shoot_dir(shoot)
+            if d is not None and key in clips.clip_files(d):
+                found += [c for c in clips.list_clips(d, read_picks(d)) if c["key"] == key]
+        for clip in found:
+            clip["selected"] = order.get(f"{clip['shoot']}/{clip['key']}", 0)
         self.send_json({"collection": slug, "name": c["name"], "days": c.get("days"),
-                        "frames": frames})
+                        "frames": frames, "clips": found})
 
     # POST
 
@@ -1514,6 +1966,10 @@ class Handler(BaseHTTPRequestHandler):
                                 "looks": all_looks(self.root)})
             elif url.path == "/api/pick":
                 self.api_pick(json.loads(self.read_body()))
+            elif url.path == "/api/trash":
+                self.api_trash(json.loads(self.read_body()))
+            elif url.path in ("/api/clip/reveal", "/api/clip/open"):
+                self.api_clip_action(url.path.rsplit("/", 1)[1], json.loads(self.read_body()))
             elif url.path.startswith("/api/collections/"):
                 self.api_collections(url.path.rsplit("/", 1)[1], json.loads(self.read_body()))
             elif url.path.startswith("/api/looks/"):
@@ -1532,8 +1988,59 @@ class Handler(BaseHTTPRequestHandler):
                                      query.get("of", ["0"])[0], query.get("single", [""])[0] == "1")
             elif url.path == "/api/import":
                 self.api_import(json.loads(self.read_body() or b"{}"))
+            elif url.path == "/api/import/cancel":
+                _import["cancel"] = True
+                self.send_json({"ok": True})
             elif url.path == "/api/eject":
                 self.api_eject()
+            elif url.path == "/api/editthumb":
+                query = parse_qs(url.query)
+                found = self.frame(query.get("shoot", [""])[0], query.get("key", [""])[0])
+                path = edited_thumb(found[0], frame_key(found[1]), query.get("h", [""])[0]) if found else None
+                if path is None:
+                    self.send_json({"error": "no such frame"}, HTTPStatus.NOT_FOUND)
+                    return
+                data = self.read_body()
+                if not data.startswith(b"\xff\xd8") or len(data) > 8 * 1024 * 1024:
+                    raise ValueError("expected a JPEG under 8 MB")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                for old in path.parent.glob(f"{glob.escape(path.name.split('.')[0])}.*.jpg"):
+                    old.unlink(missing_ok=True)      # tiles of earlier versions of the edit
+                tmp = path.with_suffix(".part")
+                tmp.write_bytes(data)
+                tmp.replace(path)
+                self.send_json({"ok": True})
+            elif url.path == "/api/music/upload":
+                self.api_music_upload(parse_qs(url.query).get("name", [""])[0])
+            elif url.path == "/api/cut/save":
+                self.api_cut_save(json.loads(self.read_body()))
+            elif url.path == "/api/cut/delete":
+                body = json.loads(self.read_body())
+                with _write_lock:
+                    cuts.cut_path(self.root, str(body.get("slug", ""))).unlink(missing_ok=True)
+                self.send_json({"ok": True})
+            elif url.path == "/api/cut/export":
+                self.api_cut_export(json.loads(self.read_body()))
+            elif url.path == "/api/cut/reveal":
+                cuts.reveal(Path(_cut_export.get("path", "")))
+                self.send_json({"ok": True})
+            elif url.path == "/api/card/rename":
+                body = json.loads(self.read_body())
+                if sys.platform != "darwin":
+                    raise ValueError("rename the card in the camera or your file manager")
+                card = {c.name: c for c in [*plugged_cards(), *empty_cards()]}.get(str(body.get("card", "")))
+                if card is None:
+                    self.send_json({"error": "that card is not plugged in"}, HTTPStatus.CONFLICT)
+                    return
+                _volume_info.pop(str(card), None)
+                if _import.get("running") or _verify.get("running"):
+                    self.send_json({"error": "can't rename during an import or check: renaming remounts the card, "
+                                             "which would interrupt it"}, HTTPStatus.CONFLICT)
+                    return
+                rename_card(card, clean_card_name(body.get("name")))
+                self.send_json({"ok": True})
+            elif url.path == "/api/card/verify":
+                self.api_verify(json.loads(self.read_body() or b"{}"))
             elif url.path == "/api/offload":
                 self.api_offload(json.loads(self.read_body() or b"{}"))
             elif url.path == "/api/proposal":
@@ -1581,16 +2088,20 @@ class Handler(BaseHTTPRequestHandler):
         Presence alone is cheap, so the page can poll it; the plan reads every
         file's date off the card and is only asked for when the card appears.
         """
-        card = plugged_card()
-        if card is None:
-            self.send_json({"card": None})
+        cards = plugged_cards()
+        empty = empty_cards()
+        if not cards:
+            self.send_json({"card": None, "cards": [], "empty": [v.name for v in empty]})
             return
-        body: dict = {"card": card.name, "eject": sys.platform == "darwin",
+        labels = {c.name: card_label(c) for c in cards}
+        body: dict = {"card": ", ".join(c.name for c in cards), "cards": [c.name for c in cards],
+                      "labels": labels, "label": ", ".join(v["label"] for v in labels.values()),
+                      "eject": sys.platform == "darwin", "store": drive_name() if store_mounted() else None,
                       "deleteFromCard": import_settings()[1],
                       "to": drive_name() if store_mounted() else (f"the library ({drive_name()} not plugged in)" if configured_store() else "the library")}
         if with_plan:
             try:
-                body["groups"] = describe_plan(self.root, card_plan(self.root, card, jpeg_only))
+                body["groups"] = describe_plan(self.root, card_plan(self.root, cards, jpeg_only), cards)
             except (ImportError_, OSError) as exc:
                 body["error"] = str(exc)
         self.send_json(body)
@@ -1600,8 +2111,8 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(delete_from_card, bool):
             self.send_json({"error": "deleteFromCard must be a boolean"}, HTTPStatus.BAD_REQUEST)
             return
-        card = plugged_card()
-        if card is None:
+        cards = plugged_cards()
+        if not cards:
             self.send_json({"error": "no camera card plugged in"}, HTTPStatus.CONFLICT)
             return
         with _import_lock:
@@ -1612,9 +2123,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "wait for the offload to finish"}, HTTPStatus.CONFLICT)
                 return
             _import.clear()
-            _import.update(running=True, card=card.name, copied=0, total=0, bytes=0,
+            _import.update(running=True, card=", ".join(c.name for c in cards), copied=0, total=0, bytes=0,
                            bytes_total=0, groups=[], error=None, current=None, deleted=0)
-        threading.Thread(target=run_import, args=(self.root, card, bool(body.get("jpegOnly")), delete_from_card),
+        threading.Thread(target=run_import, args=(self.root, cards, bool(body.get("jpegOnly")), delete_from_card),
                          daemon=True).start()
         self.send_json(_import)
 
@@ -1653,31 +2164,110 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=run_offload, args=(self.root, shoots), daemon=True).start()
         self.send_json(_offload)
 
-    def api_eject(self) -> None:
-        card = plugged_card()
+    def api_music_upload(self, name: str) -> None:
+        """Add a song to <library>/music for cuts to use."""
+        name = re.sub(r"[^A-Za-z0-9_.-]+", "-", Path(name).name).strip("-.")
+        if not name or Path(name).suffix.lower() not in cuts.MUSIC_EXTS:
+            raise ValueError("music must be mp3, m4a, aac, wav, aiff or flac")
+        length_text = self.headers.get("Content-Length", "")
+        if not re.fullmatch(r"[0-9]{1,10}", length_text) or not 0 < int(length_text) <= 1024 ** 3:
+            raise ValueError("music must be under 1 GB")
+        folder = self.root / cuts.MUSIC_DIR
+        folder.mkdir(exist_ok=True)
+        part = folder / f".{name}.part"
+        left = int(length_text)
+        with part.open("wb") as out:
+            while left > 0:
+                chunk = self.rfile.read(min(clips.CHUNK, left))
+                if not chunk:
+                    break
+                out.write(chunk)
+                left -= len(chunk)
+        if left:
+            part.unlink(missing_ok=True)
+            raise ValueError("incomplete upload")
+        part.replace(folder / name)
+        self.send_json({"file": name, "music": cuts.music_files(self.root)})
+
+    def api_cut_save(self, body: dict) -> None:
+        """Save a cut (new, or under its old slug, renaming if the name changed)."""
+        cut = cuts.clean_cut(body.get("cut"))
+        for c in cut["clips"]:
+            if not self.clip(c["shoot"], c["key"]):
+                self.send_json({"error": f"no such clip: {c['shoot']}/{c['key']}"}, HTTPStatus.NOT_FOUND)
+                return
+        old = body.get("slug") or None
+        with _write_lock:
+            if old is None and cuts.cut_path(self.root, cuts.slugify(cut["name"])).exists():
+                self.send_json({"error": f"there is already a cut called {cut['name']}"}, HTTPStatus.CONFLICT)
+                return
+            slug = cuts.write_cut(self.root, cut, old)
+        self.send_json({"slug": slug, "cut": cuts.read_cut(self.root, slug)})
+
+    def api_cut_export(self, body: dict) -> None:
+        slug = str(body.get("slug", ""))
+        size, codec = str(body.get("size", "1080")), str(body.get("codec", "h264"))
+        if size not in cuts.SIZES or codec not in cuts.CODECS:
+            raise ValueError("unknown size or codec")
+        with _import_lock:
+            if _cut_export.get("running"):
+                self.send_json({"error": "an export is already running"}, HTTPStatus.CONFLICT)
+                return
+            _cut_export.clear()
+            _cut_export.update(running=True, slug=slug, progress=0.0, error=None)
+        threading.Thread(target=cuts.export, args=(self.root, slug, size, codec, _cut_export), daemon=True).start()
+        self.send_json({k: v for k, v in _cut_export.items() if k != "pid"})
+
+    def api_verify(self, body: dict) -> None:
+        """Check that everything on a card is safely in the library."""
+        cards = {c.name: c for c in plugged_cards()}
+        name = body.get("card")
+        # With no card named, the one plugged in; a named card must be there.
+        card = cards.get(str(name)) if name else (next(iter(cards.values())) if len(cards) == 1 else None)
         if card is None:
+            self.send_json({"error": "that card is not plugged in"}, HTTPStatus.CONFLICT)
+            return
+        with _import_lock:
+            if _import.get("running") or _offload.get("running") or _verify.get("running"):
+                self.send_json({"error": "wait for the import or offload to finish"}, HTTPStatus.CONFLICT)
+                return
+            _verify.clear()
+            _verify.update(running=True, card=card.name, error=None, safe=False, missing=0)
+        threading.Thread(target=run_verify, args=(self.root, card), daemon=True).start()
+        self.send_json(dict(_verify))
+
+    def api_eject(self) -> None:
+        cards = plugged_cards() or empty_cards()
+        if not cards:
             self.send_json({"error": "no camera card plugged in"}, HTTPStatus.CONFLICT)
             return
         if _import.get("running"):
             self.send_json({"error": "wait for the import to finish"}, HTTPStatus.CONFLICT)
             return
-        error = eject(card)
-        if error:
-            self.send_json({"error": error}, HTTPStatus.BAD_GATEWAY)
+        errors = [f"{card.name}: {error}" for card in cards if (error := eject(card))]
+        if errors:
+            self.send_json({"error": "; ".join(errors)}, HTTPStatus.BAD_GATEWAY)
             return
-        self.send_json({"ejected": card.name})
+        self.send_json({"ejected": ", ".join(c.name for c in cards)})
 
     def api_pick(self, body: dict) -> None:
-        shoot, key, picked = body["shoot"], body["key"], bool(body["picked"])
-        found = self.frame(shoot, key)
+        # A frame is picked, marked for deletion ("rejected"), or neither.
+        shoot, key = body["shoot"], body["key"]
+        field = "rejected" if "rejected" in body else "picked"
+        on = bool(body[field])
+        found = self.frame(shoot, key) or self.clip(shoot, key)
         if not found:
             self.send_json({"error": "no such frame"}, HTTPStatus.NOT_FOUND)
             return
+        name, other = (REJECTS_FILE, PICKS_FILE) if field == "rejected" else (PICKS_FILE, REJECTS_FILE)
         with _write_lock:
-            picks = read_picks(found[0])
-            (picks.add if picked else picks.discard)(key)
-            write_picks(found[0], picks)
-        self.send_json({"key": key, "picked": picked, "count": len(picks)})
+            marks, others = read_picks(found[0], name), read_picks(found[0], other)
+            (marks.add if on else marks.discard)(key)
+            write_picks(found[0], marks, name)
+            if on and key in others:
+                others.discard(key)
+                write_picks(found[0], others, other)
+        self.send_json({"key": key, field: on, "count": len(marks)})
 
     def api_looks(self, action: str, body: dict) -> None:
         """Save a look (replacing one of the same name) or delete one."""
@@ -1709,7 +2299,22 @@ class Handler(BaseHTTPRequestHandler):
                 c = {"name": name, "items": []}
                 if days := clean_days(body):
                     c["days"] = days
+                if date := clean_date(body.get("date")):
+                    c["date"] = date
                 collections.append(c)
+            elif action == "date":
+                c = find_collection(collections, body.get("collection", ""))
+                if c is None:
+                    self.send_json({"error": "no such collection"}, HTTPStatus.NOT_FOUND)
+                    return
+                date = clean_date(body.get("date"))
+                if date:
+                    c["date"] = date
+                else:
+                    c.pop("date", None)
+                write_collections(self.root, collections)
+                self.send_json({"ok": True, "slug": slugify(c["name"]), "date": collection_date(c)})
+                return
             elif action in ("rename", "delete"):
                 c = find_collection(collections, body.get("collection", ""))
                 if c is None:
@@ -1868,9 +2473,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"selects": c.get("items", []), "rev": rev})
 
     def api_select(self, body: dict) -> None:
-        """Add a frame to a collection, or take it out. Order is kept; new ones go last."""
+        """Add a frame to a collection, or take it out. Order is kept; new ones go last.
+
+        With "refs" (a list of shoot/key), adds all of them that aren't in yet.
+        """
+        if "refs" in body:
+            refs = body["refs"]
+            if not isinstance(refs, list) or not all(isinstance(r, str) for r in refs):
+                raise ValueError("refs must be a list of shoot/key strings")
+            for ref in refs:
+                shoot, _, key = ref.partition("/")
+                if not self.frame(shoot, key) and not self.clip(shoot, key):
+                    self.send_json({"error": f"no such frame: {ref}"}, HTTPStatus.NOT_FOUND)
+                    return
+
+            def add_all(c):
+                items = c.get("items", [])
+                c["items"] = items + [r for r in dict.fromkeys(refs) if r not in items]
+
+            self._with_collection(body["collection"], add_all)
+            return
         shoot, key, selected = body["shoot"], body["key"], bool(body["selected"])
-        if not self.frame(shoot, key):
+        if not self.frame(shoot, key) and not self.clip(shoot, key):
             self.send_json({"error": "no such frame"}, HTTPStatus.NOT_FOUND)
             return
         ref = f"{shoot}/{key}"

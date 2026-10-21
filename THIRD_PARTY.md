@@ -51,7 +51,9 @@ compensates for it. Test this behavior when updating the decoder.
 
 ## Optional local programs and databases
 
-Lensfun's database is read from the user's installation and is **not bundled**.
+Lensfun's database is read from the user's installation and is **not bundled**;
+`framewright lenses --update` downloads Lensfun's newest database into
+`~/.local/share/lensfun/updates`, as Lensfun's own `lensfun-update-data` does.
 The database uses CC BY-SA 3.0; see [Lensfun](https://lensfun.github.io/).
 ImageMagick, macOS `sips`, Chrome/Chromium, Edge/Brave, Tailscale and native file
 managers are optional system programs. Their licenses apply to their own
