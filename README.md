@@ -20,6 +20,11 @@ Requires **Python 3.10+** and a current browser with WebGL2. From a checkout:
 python -m framewright
 ```
 
+On a Mac, `./dev` does the same and installs Python with Homebrew first if it
+is missing. `./dev app` opens this checkout in the Mac app window instead,
+installing the Xcode command line tools and building the app when needed.
+Other arguments pass through, as in `./dev --library /path/to/library`.
+
 The app opens at http://localhost:8765. Without a configured library it uses
 `~/Pictures/Framewright`, created on first run. A library contains shoot folders
 directly: if migrating from the personal tool, pass its existing `shoots/` folder

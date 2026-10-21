@@ -126,6 +126,8 @@ TRIPS_FILE = "trips.json"   # the old format, migrated on first read
 LOOKS_FILE = "looks.json"
 LUTS_DIR = "luts"
 MAX_EXPORT_BYTES = 256 * 1024 * 1024
+# A refused request body up to this size is drained so the socket closes cleanly.
+REJECT_DRAIN_BYTES = 1024 * 1024
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 # Recipe fields and the range each is clamped to; anything else is dropped,
@@ -1251,13 +1253,11 @@ class Handler(BaseHTTPRequestHandler):
             allowed.update(("localhost", "127.0.0.1", "[::1]"))
         host = hosts[0].lower() if len(hosts) == 1 else ""
         if host not in allowed:
-            self.send_error(HTTPStatus.FORBIDDEN, "Host must name this loopback server and port")
-            return False
+            return self.reject(HTTPStatus.FORBIDDEN, "Host must name this loopback server and port")
         origins = self.headers.get_all("Origin", [])
         if (len(origins) > 1 or (origins and origins[0].lower() != f"http://{host}")
                 or self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site"):
-            self.send_error(HTTPStatus.FORBIDDEN, "cross-origin requests are not allowed")
-            return False
+            return self.reject(HTTPStatus.FORBIDDEN, "cross-origin requests are not allowed")
         if self.command == "POST":
             path = urlparse(self.path).path
             expected = {
@@ -1269,9 +1269,34 @@ class Handler(BaseHTTPRequestHandler):
             types = self.headers.get_all("Content-Type", [])
             content_type = types[0].split(";", 1)[0].strip().lower() if len(types) == 1 else ""
             if expected and content_type != expected:
-                self.send_error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, f"request requires {expected}")
-                return False
+                return self.reject(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, f"request requires {expected}")
         return True
+
+    def reject(self, status: HTTPStatus, message: str) -> bool:
+        """Refuse before the body reaches any handler, then close cleanly.
+
+        Closing a socket with unread request bytes makes Windows reset the
+        connection, which can abort the client before it reads the refusal.
+        A small body is drained and thrown away (never parsed); a large one
+        is left for the reset rather than spending time receiving it.
+        """
+        self.send_error(status, message)
+        self.wfile.flush()
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if 0 < length <= REJECT_DRAIN_BYTES:
+            try:
+                self.connection.settimeout(1)
+                while length > 0:
+                    chunk = self.rfile.read1(min(length, 65536))
+                    if not chunk:
+                        break
+                    length -= len(chunk)
+            except OSError:
+                pass
+        return False
 
     root: Path | None = None
     setup_token = uuid.uuid4().hex
