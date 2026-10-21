@@ -224,14 +224,23 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
-def already_copied(shoot: Path, kind: str, src: Path) -> bool:
-    """Per-file identity keeps missing RAW/JPEG/sidecar siblings importable."""
+def already_copied(shoot: Path, kind: str, src: Path, strict: bool = False) -> bool:
+    """Per-file identity keeps missing RAW/JPEG/sidecar siblings importable.
+
+    Planning compares name, size and (for the store) the card's timestamp,
+    which takes seconds; strict re-hashes both sides, which reads every byte
+    and is kept for erasing a card. Each copy was hash-verified when made.
+    """
     local = shoot / kind / src.name
     if local.is_file():
-        return local.stat().st_size == src.stat().st_size and file_hash(local) == file_hash(src)
+        if local.stat().st_size != src.stat().st_size:
+            return False
+        return file_hash(local) == file_hash(src) if strict else True
     metadata = read_manifest(shoot).get(f"{kind}/{src.name}")
     if not metadata or metadata.get("size") != src.stat().st_size:
         return False
+    if not strict and abs(metadata.get("mtime", -1) - src.stat().st_mtime) < 0.002:
+        return True
     if metadata.get("sha256"):
         return metadata["sha256"] == file_hash(src)
     # Older manifests have no hash. Size and camera timestamp are stronger
@@ -239,7 +248,7 @@ def already_copied(shoot: Path, kind: str, src: Path) -> bool:
     return abs(metadata.get("mtime", -1) - src.stat().st_mtime) < 0.002
 
 
-def matching_shoot(library: Path, files: list[Path], day: date) -> Path | None:
+def matching_shoot(library: Path, files: list[Path], day: date, strict: bool = False) -> Path | None:
     if not library.is_dir():
         return None
     found = []
@@ -249,7 +258,7 @@ def matching_shoot(library: Path, files: list[Path], day: date) -> Path | None:
         # Normal patterns contain the date; custom patterns must too.
         if day.isoformat() not in shoot.name:
             continue
-        if any(already_copied(shoot, "video" if is_video(files) else "raw", f)
+        if any(already_copied(shoot, "video" if is_video(files) else "raw", f, strict)
                for f in files if f.suffix.lower() in MEDIA_EXTS):
             found.append(shoot)
     return found[0] if len(found) == 1 else None
@@ -372,6 +381,7 @@ def plan(
     match: str | None = None,
     jpeg_only: bool = False,
     folder_pattern: str | None = None,
+    strict: bool = False,
 ) -> dict[Path, list[Path]]:
     """Map destination dir -> source files to copy there.
 
@@ -424,11 +434,11 @@ def plan(
         shoot = shoots_root(library) / folder
         # Continue an earlier/partial import into its original shoot even if
         # naming settings have changed. Match a sibling, not just a day.
-        existing = matching_shoot(library, frames[key], day)
+        existing = matching_shoot(library, frames[key], day, strict)
         if existing is not None:
             shoot = existing
         dest = shoot / kind
-        pending = [f for f in sorted(frames[key]) if force or not already_copied(shoot, kind, f)]
+        pending = [f for f in sorted(frames[key]) if force or not already_copied(shoot, kind, f, strict)]
         if pending:
             by_dest[dest] += pending
     return dict(by_dest)

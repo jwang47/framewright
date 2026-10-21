@@ -31,6 +31,7 @@
       </div>
       <button id="importBtn" class="card-btn" hidden title="Import everything new from the camera card in one click">Import</button>
       <div class="card-bar" id="cardBar" hidden><div></div></div>
+      <button id="cardCancel" class="card-btn subtle" hidden>Cancel import</button>
     </div>
     <div class="drive-row" id="driveRow" hidden>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 12h.01M11 12h6"/></svg>
@@ -88,6 +89,7 @@
   </div>
   <p class="hint">Copies are checked byte for byte against the card. Source files stay on the card unless you enable deletion above.</p>
   <div class="dlg-actions">
+    <button id="importCancel" hidden>Cancel import</button>
     <button id="importFormat" class="danger" hidden title="Erase the card for reuse, after checking every file is in the library">Format card…</button>
     <button id="importEject" hidden>Eject card</button>
     <button id="importClose">Close</button>

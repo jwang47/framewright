@@ -722,3 +722,7 @@ dialog { background: var(--panel); color: var(--text); border: 1px solid var(--l
 .cut-empty { margin: 0; align-self: center; color: var(--muted); padding-left: 4px; }
 .cut-export-opts { display: flex; gap: 16px; margin: 6px 0 12px; }
 #cutExportDlg progress { width: 100%; accent-color: var(--pick); }
+/* The sticky month heading covers the grid edge to edge: over the grid's top
+   padding, its side padding, and the row gap below it. */
+.grid > .month { top: -4px; margin-left: -20px; margin-right: -20px; padding-left: 20px; padding-right: 20px;
+  box-shadow: 0 4px 0 var(--bg); }

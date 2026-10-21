@@ -1716,14 +1716,15 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       const left = rate > 0 ? (st.bytes_total - st.bytes) / rate : NaN;
       const speed = rate > 0 ? `${Math.round(rate / 2 ** 20)} MB/s` : '';
       $('#importBar').value = pct;
-      $('#importNow').textContent = st.current
-        ? [`${st.copied}/${st.total}`, st.current, speed, eta(left)].filter(Boolean).join(' · ') : '';
+      $('#importNow').textContent = st.phase === 'checking' ? 'Checking the card for new files…'
+        : st.current ? [`${st.copied}/${st.total}`, st.current, speed, eta(left)].filter(Boolean).join(' · ') : '';
       const p = `${(pct * 100).toFixed(1)}%`;
       btn.style.setProperty('--pct', p);
       bar.style.setProperty('--pct', p);
       $('#cardBar').hidden = false;
       $('#cardBar').style.setProperty('--pct', p);
-      btn.textContent = `Importing ${Math.round(pct * 100)}%${eta(left) ? ' · ' + eta(left) : ''}`;
+      btn.textContent = st.phase === 'checking' ? 'Checking card…'
+        : `Importing ${Math.round(pct * 100)}%${eta(left) ? ' · ' + eta(left) : ''}`;
       document.title = `${Math.round(pct * 100)}% · Framewright`;
       native({ type: 'import', running: true, progress: pct });
     } while (st.running);
@@ -1740,7 +1741,14 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
     try {
       await app.post('/api/import', { jpegOnly: $('#importJpeg').checked, deleteFromCard: $('#importDelete').checked });
+      $('#importCancel').hidden = $('#cardCancel').hidden = false;
       const st = await watch();
+      if (st.canceled) {
+        $('#importNow').textContent = `canceled after ${st.copied} of ${st.total} files; those are verified and kept`;
+        app.status('import canceled', 4000);
+        await refreshMenus(`${app.view?.kind}:${app.view?.id}`);
+        return;
+      }
       if (st.error) throw new Error(st.error);
       $('#importNow').textContent = `imported ${st.copied} files, verified${st.deleted ? ` · ${st.deleted} source files deleted` : ''}`;
       app.status(`imported ${what(st.groups)} from ${st.card}`, 5000);
@@ -1759,6 +1767,7 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     } finally {
       running = false;
       document.title = 'Framewright';
+      $('#importCancel').hidden = $('#cardCancel').hidden = true;
       bar.classList.remove('on', 'determinate');
       $('#cardBar').hidden = true;
       native({ type: 'import', running: false, progress: 0 });
@@ -1814,6 +1823,13 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       app.status(`not formatted: ${e.message}`, 0);
     }
     await loadPlan().catch(() => {});
+  });
+
+  $('#cardCancel').addEventListener('click', () => $('#importCancel').click());
+  $('#importCancel').addEventListener('click', async e => {
+    e.currentTarget.blur();
+    await app.post('/api/import/cancel', {}).catch(() => {});
+    $('#importNow').textContent = 'canceling after the current file…';
   });
 
   // The Mac app's File ▸ Import menu item (⌘I) lands here.

@@ -992,12 +992,13 @@ def plugged_cards() -> list[Path]:
         return []
 
 
-def card_plan(root: Path, cards: list[Path], jpeg_only: bool) -> dict[Path, list[Path]]:
-    """What importing the cards would copy; empty when nothing on them is new."""
+def card_plan(root: Path, cards: list[Path], jpeg_only: bool, strict: bool = False) -> dict[Path, list[Path]]:
+    """What importing the cards would copy; empty when nothing on them is new.
+    strict re-hashes every file against its copy (slow; for erasing a card)."""
     by_dest: dict[Path, list[Path]] = {}
     for card in cards:
         try:
-            planned = plan(card, root, None, None, False, jpeg_only=jpeg_only)
+            planned = plan(card, root, None, None, False, jpeg_only=jpeg_only, strict=strict)
         except ImportError_ as exc:
             if str(exc).startswith("no media files"):
                 continue
@@ -1027,12 +1028,17 @@ def run_import(root: Path, cards: list[Path], jpeg_only: bool, delete_from_card:
     go to the external store when it is plugged in (store.py)."""
     state = _import
     try:
+        state["phase"] = "checking"
         by_dest = card_plan(root, cards, jpeg_only)
+        state["phase"] = "copying"
         files = [(dest, f) for dest, fs in sorted(by_dest.items()) for f in fs]
         to_store = store_mounted()
         state.update(total=len(files), bytes_total=sum(f.stat().st_size for _, f in files),
                      groups=describe_plan(root, by_dest, cards), to=drive_name() if to_store else "the library")
         for dest, src in files:
+            if state.get("cancel"):
+                state["canceled"] = True
+                return      # between files: everything copied so far is verified and kept
             state["current"] = src.name
             size = src.stat().st_size
             place(src, dest, to_store)
@@ -1135,7 +1141,7 @@ def run_format(root: Path, card: Path) -> None:
     try:
         state["phase"] = "checking"
         info = card_volume(card)
-        pending = card_plan(root, [card], False)
+        pending = card_plan(root, [card], False, strict=True)
         if pending:
             n = sum(len(v) for v in pending.values())
             raise ValueError(f"{n} files on {card.name} are not in the library yet; import them first")
@@ -1858,6 +1864,9 @@ class Handler(BaseHTTPRequestHandler):
                                      query.get("of", ["0"])[0], query.get("single", [""])[0] == "1")
             elif url.path == "/api/import":
                 self.api_import(json.loads(self.read_body() or b"{}"))
+            elif url.path == "/api/import/cancel":
+                _import["cancel"] = True
+                self.send_json({"ok": True})
             elif url.path == "/api/eject":
                 self.api_eject()
             elif url.path == "/api/cut/save":
