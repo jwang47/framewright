@@ -752,8 +752,10 @@ main.small .frame .sel { min-width: 8px; width: 8px; height: 8px; padding: 0; fo
 .cut-overlay.lower { bottom: 14%; font-size: clamp(12px, 2.4vw, 30px); }
 .cut-overlay.lower span { background: rgba(0,0,0,.45); padding: .3em .7em; border-radius: 4px; }
 /* A video always says so: ▶ beside its length, or just ▶ on tiny tiles. */
-.frame .dur::before { content: '▶'; font-size: 7px; margin-right: 3px; vertical-align: 1px; }
-main.small .frame .dur { display: block; font-size: 0; padding: 0 4px; }
-main.small .frame .dur::before { font-size: 7px; margin: 0; }
+.frame .dur { display: flex; align-items: center; gap: 3px; width: auto; height: auto; }
+.frame .dur b { font-size: 7px; font-weight: 400; }
+.frame .dur em { font-style: normal; }
+main.small .frame .dur { display: flex; }
+main.small .frame .dur em { display: none; }
 /* Big grids: tiles off screen skip layout and paint. */
 main.grid > figure { content-visibility: auto; contain-intrinsic-size: auto 100px; }

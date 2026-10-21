@@ -110,7 +110,7 @@ export function createVideos(app) {
           <img loading="lazy" decoding="async" draggable="false" alt="${c.key}"
             src="/clipposter/${encodeURIComponent(c.shoot)}/${c.key}.jpg">
           <button class="star" aria-label="Pick ${c.key}"></button>
-          <span class="dur">${clock(c.duration)}</span>
+          <span class="dur"><b>▶</b><em>${clock(c.duration)}</em></span>
           ${c.captureFps || c.fps > 61 ? `<span class="hfr">${Math.round(c.captureFps || c.fps)}p</span>` : ''}
           ${c.online ? '' : '<span class="off" title="On a drive that is not plugged in">offline</span>'}
           ${app.whereTag(c)}

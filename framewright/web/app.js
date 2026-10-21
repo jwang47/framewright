@@ -451,7 +451,7 @@ const library = {
         <button class="star" aria-label="Pick ${c.key}"></button>
         <span class="sel"></span>
         <span class="play" aria-hidden="true">▶</span>
-        <span class="dur">${videos.clock(c.duration)}</span>
+        <span class="dur"><b>▶</b><em>${videos.clock(c.duration)}</em></span>
         ${c.captureFps || c.fps > 61 ? `<span class="hfr">${Math.round(c.captureFps || c.fps)}p</span>` : ''}
         ${c.online ? '' : '<span class="off" title="On a drive that is not plugged in">offline</span>'}
         ${app.whereTag(c)}
