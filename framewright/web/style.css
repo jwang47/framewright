@@ -808,3 +808,16 @@ main.grid > figure { content-visibility: auto; contain-intrinsic-size: auto 100p
 .cut-blocks { height: var(--clip-h, 72px); }
 .cut-timeline { border-top: 0; }
 @media (max-width: 900px) { .nav-split { display: none; } }
+
+/* Chosen tiles (⌘/⇧-click, ⌘A): a blue check, tint and outline that a pick's
+   amber bar or a dim mark doesn't hide. */
+#list figure.chosen .frame, #list figure.chosen.picked .frame { outline: 2px solid var(--focus); outline-offset: 1px; }
+#list figure.chosen.focus .frame { outline-width: 3px; }
+#list figure.chosen::after { content: none; }
+#list figure.chosen .frame::after { content: '✓'; position: absolute; top: 4px; left: 4px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--focus); color: #0E0E0D; font: 700 11px/18px var(--sans); text-align: center;
+  z-index: 3; pointer-events: none; box-shadow: 0 0 0 2px rgba(14,14,13,.6); }
+#list figure.chosen .frame img { filter: brightness(.82) saturate(.9); }
+#list figure.chosen .frame { background: var(--focus); }
+#list figure.chosen .sel { left: 26px; }
+#list figure.chosen.rejected .frame::after { content: '✓'; color: #0E0E0D; inset: auto; top: 4px; left: 4px; font-size: 11px; display: block; }
