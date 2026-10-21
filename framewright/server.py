@@ -100,7 +100,8 @@ from .import_photos import (  # noqa: E402
     place,
     plan,
 )
-from .store import drive_name, read_manifest, store_mounted, stored  # noqa: E402
+from .store import drive_name, forget, read_manifest, store_mounted, stored  # noqa: E402
+from .trash import to_trash  # noqa: E402
 from . import clips  # noqa: E402
 from .settings import configured_port, configured_store, resolve_library, save_library, load_config, import_settings  # noqa: E402
 
@@ -112,6 +113,7 @@ STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript",
 PREVIEW_PX = 2000
 THUMB_PX = 480
 PICKS_FILE = "picks.txt"
+REJECTS_FILE = "rejects.txt"   # marked for deletion
 PREVIEW_DIR = ".preview"
 EXPORT_DIR = "export"
 EDIT_SUFFIX = ".edit.json"
@@ -332,16 +334,16 @@ def atomic_write(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
-def read_picks(shoot_dir: Path) -> set[str]:
-    path = shoot_dir / PICKS_FILE
+def read_picks(shoot_dir: Path, name: str = PICKS_FILE) -> set[str]:
+    path = shoot_dir / name
     if not path.is_file():
         return set()
     return {line.strip() for line in path.read_text().splitlines() if line.strip()}
 
 
-def write_picks(shoot_dir: Path, picks: set[str]) -> None:
-    """Replace picks.txt, or remove it once nothing is picked."""
-    path = shoot_dir / PICKS_FILE
+def write_picks(shoot_dir: Path, picks: set[str], name: str = PICKS_FILE) -> None:
+    """Replace picks.txt (or rejects.txt), or remove it once it would be empty."""
+    path = shoot_dir / name
     if not picks:
         path.unlink(missing_ok=True)
         return
@@ -1322,6 +1324,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "no such collection"}, HTTPStatus.NOT_FOUND)
                 return
             self.send_json({"name": c["name"], "items": c.get("items", []), "post": c.get("post"),
+                            "clipItems": [r for r in c.get("items", []) if self.clip(*r.partition("/")[::2])],
                             "rev": collection_rev(self.root, query.get("slug", [""])[0])})
             return
 
@@ -1401,7 +1404,7 @@ class Handler(BaseHTTPRequestHandler):
             dirs = [self.root / s for s in list_shoots(self.root)]
         out = []
         for d in dirs:
-            found = clips.list_clips(d, read_picks(d))
+            found = clips.list_clips(d, read_picks(d), read_picks(d, REJECTS_FILE))
             if found:
                 out.append({"shoot": d.name, "clips": found})
                 if d.name not in self.warmed_clips:
@@ -1463,6 +1466,56 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass    # the player seeked elsewhere and dropped this request
 
+    def media_files(self, shoot_dir: Path, key: str) -> tuple[list[Path], set[str]]:
+        """A frame's or clip's files, in the library and on the store, and
+        the store manifest entries they make up."""
+        files, rels = [], set()
+        for sub in ("raw", "video"):
+            local = shoot_dir / sub
+            if local.is_dir():
+                files += [f for f in local.iterdir() if f.is_file() and frame_key(f) == key]
+            for name, (path, _) in stored(shoot_dir, sub).items():
+                if frame_key(path) == key:
+                    if not path.is_file():
+                        raise ValueError(f"{name} is on {drive_name()}, which is not plugged in")
+                    files.append(path)
+                    rels.add(f"{sub}/{name}")
+        return files, rels
+
+    def api_trash(self, body: dict) -> None:
+        """Move frames and clips to the Trash, with their recipes, and forget them."""
+        refs = body.get("refs")
+        if not isinstance(refs, list) or not refs or not all(isinstance(r, str) for r in refs):
+            raise ValueError("refs must be a non-empty list of shoot/key strings")
+        plan = []
+        for ref in dict.fromkeys(refs):
+            shoot, _, key = ref.partition("/")
+            d = self.shoot_dir(shoot)
+            if d is None or not (self.frame(shoot, key) or self.clip(shoot, key)):
+                self.send_json({"error": f"no such frame: {ref}"}, HTTPStatus.NOT_FOUND)
+                return
+            files, rels = self.media_files(d, key)
+            recipes = [p for p in (edit_path(d, key), proposal_path(d, key)) if p.is_file()]
+            plan.append((d, key, files + recipes, rels))
+        with _write_lock:
+            for d, key, files, rels in plan:
+                to_trash(files, self.root)
+                forget(d, rels)
+                for name in (PICKS_FILE, REJECTS_FILE):
+                    marks = read_picks(d, name)
+                    if key in marks:
+                        marks.discard(key)
+                        write_picks(d, marks, name)
+                for cache in (d / PREVIEW_DIR / f"{key}.jpg", d / PREVIEW_DIR / "thumb" / f"{key}.jpg",
+                              d / PREVIEW_DIR / clips.CLIP_DIR / f"{key}.jpg", d / PREVIEW_DIR / clips.CLIP_DIR / f"{key}.json"):
+                    cache.unlink(missing_ok=True)
+            gone = {f"{d.name}/{key}" for d, key, _, _ in plan}
+            collections = read_collections(self.root)
+            for c in collections:
+                c["items"] = [r for r in c.get("items", []) if r not in gone]
+            write_collections(self.root, collections)
+        self.send_json({"trashed": sorted(gone)})
+
     def api_clip_action(self, action: str, body: dict) -> None:
         found = self.clip(str(body.get("shoot", "")), str(body.get("key", "")))
         if not found:
@@ -1477,7 +1530,7 @@ class Handler(BaseHTTPRequestHandler):
         if shoot not in self.warmed:
             self.warmed.add(shoot)
             threading.Thread(target=warm_previews, args=(self.root, shoot), daemon=True).start()
-        picks = read_picks(d)
+        picks, rejects = read_picks(d), read_picks(d, REJECTS_FILE)
         snapshot = photo_snapshot(d)
         raws, times = snapshot.raws, snapshot.files
         sources = sorted(snapshot.sources.items(), key=lambda kv: (times[kv[1]], kv[0]))
@@ -1495,6 +1548,7 @@ class Handler(BaseHTTPRequestHandler):
                 "params": recipe(key),     # so thumbnails can show the edit
                 "time": datetime.fromtimestamp(times[src]).strftime("%H:%M:%S"),
                 "picked": key in picks,
+                "rejected": key in rejects,
                 "raw": key in raws,                   # a raw file to develop from
                 "jpeg": src.suffix.lower() in JPEG_EXTS,
                 "edited": edit_path(d, key).is_file(),
@@ -1598,8 +1652,17 @@ class Handler(BaseHTTPRequestHandler):
                 frames.append(by_shoot[shoot][key])
         for f in frames:
             f["selected"] = order.get(f"{f['shoot']}/{f['key']}", 0)
+        # Clips: every clip of the collection's days, then clips added from other days.
+        found = [clip for shoot in days for clip in clips.list_clips(self.root / shoot, read_picks(self.root / shoot), read_picks(self.root / shoot, REJECTS_FILE))]
+        for ref in items:
+            shoot, _, key = ref.partition("/")
+            d = None if shoot in days else self.shoot_dir(shoot)
+            if d is not None and key in clips.clip_files(d):
+                found += [c for c in clips.list_clips(d, read_picks(d)) if c["key"] == key]
+        for clip in found:
+            clip["selected"] = order.get(f"{clip['shoot']}/{clip['key']}", 0)
         self.send_json({"collection": slug, "name": c["name"], "days": c.get("days"),
-                        "frames": frames})
+                        "frames": frames, "clips": found})
 
     # POST
 
@@ -1636,6 +1699,8 @@ class Handler(BaseHTTPRequestHandler):
                                 "looks": all_looks(self.root)})
             elif url.path == "/api/pick":
                 self.api_pick(json.loads(self.read_body()))
+            elif url.path == "/api/trash":
+                self.api_trash(json.loads(self.read_body()))
             elif url.path in ("/api/clip/reveal", "/api/clip/open"):
                 self.api_clip_action(url.path.rsplit("/", 1)[1], json.loads(self.read_body()))
             elif url.path.startswith("/api/collections/"):
@@ -1793,16 +1858,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"ejected": ", ".join(c.name for c in cards)})
 
     def api_pick(self, body: dict) -> None:
-        shoot, key, picked = body["shoot"], body["key"], bool(body["picked"])
+        # A frame is picked, marked for deletion ("rejected"), or neither.
+        shoot, key = body["shoot"], body["key"]
+        field = "rejected" if "rejected" in body else "picked"
+        on = bool(body[field])
         found = self.frame(shoot, key) or self.clip(shoot, key)
         if not found:
             self.send_json({"error": "no such frame"}, HTTPStatus.NOT_FOUND)
             return
+        name, other = (REJECTS_FILE, PICKS_FILE) if field == "rejected" else (PICKS_FILE, REJECTS_FILE)
         with _write_lock:
-            picks = read_picks(found[0])
-            (picks.add if picked else picks.discard)(key)
-            write_picks(found[0], picks)
-        self.send_json({"key": key, "picked": picked, "count": len(picks)})
+            marks, others = read_picks(found[0], name), read_picks(found[0], other)
+            (marks.add if on else marks.discard)(key)
+            write_picks(found[0], marks, name)
+            if on and key in others:
+                others.discard(key)
+                write_picks(found[0], others, other)
+        self.send_json({"key": key, field: on, "count": len(marks)})
 
     def api_looks(self, action: str, body: dict) -> None:
         """Save a look (replacing one of the same name) or delete one."""
@@ -1993,9 +2065,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"selects": c.get("items", []), "rev": rev})
 
     def api_select(self, body: dict) -> None:
-        """Add a frame to a collection, or take it out. Order is kept; new ones go last."""
+        """Add a frame to a collection, or take it out. Order is kept; new ones go last.
+
+        With "refs" (a list of shoot/key), adds all of them that aren't in yet.
+        """
+        if "refs" in body:
+            refs = body["refs"]
+            if not isinstance(refs, list) or not all(isinstance(r, str) for r in refs):
+                raise ValueError("refs must be a list of shoot/key strings")
+            for ref in refs:
+                shoot, _, key = ref.partition("/")
+                if not self.frame(shoot, key) and not self.clip(shoot, key):
+                    self.send_json({"error": f"no such frame: {ref}"}, HTTPStatus.NOT_FOUND)
+                    return
+
+            def add_all(c):
+                items = c.get("items", [])
+                c["items"] = items + [r for r in dict.fromkeys(refs) if r not in items]
+
+            self._with_collection(body["collection"], add_all)
+            return
         shoot, key, selected = body["shoot"], body["key"], bool(body["selected"])
-        if not self.frame(shoot, key):
+        if not self.frame(shoot, key) and not self.clip(shoot, key):
             self.send_json({"error": "no such frame"}, HTTPStatus.NOT_FOUND)
             return
         ref = f"{shoot}/{key}"

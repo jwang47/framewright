@@ -41,7 +41,7 @@ export function createFullscreen(app) {
         (f.picked ? ' · ★' : '') + (f.selected ? ` · #${f.selected} in ${app.targetName()}` : '');
     }
     $('#fsCount').textContent = `${st.at + 1} / ${count()}`;
-    $('#fsHint').textContent = st.drawn ? 'H/L or ←/→ slides · Esc exit' : 'H/L or ←/→ photos · Space pick · S add · Esc exit';
+    $('#fsHint').textContent = st.drawn ? 'H/L or ←/→ slides · Esc exit' : 'H/L or ←/→ photos · P pick · S add · Esc exit';
     // The caption shows on arrival and fades; moving the mouse brings it back.
     layer.classList.add('show-ui');
     clearTimeout(st.capT);
@@ -158,9 +158,9 @@ export function createFullscreen(app) {
       if (k === 'escape' || (k === 'f' && e.shiftKey)) { e.preventDefault(); close(); }
       else if (k === 'arrowright' || k === 'arrowdown' || k === 'j' || k === 'l') { e.preventDefault(); step(1); }
       else if (k === 'arrowleft' || k === 'arrowup' || k === 'k' || k === 'h') { e.preventDefault(); step(-1); }
-      else if (k === 'p' && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); close(); app.setTab('post'); }
+      else if (k === 'p' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); close(); app.setTab('post'); }
       else if (st.drawn) return;
-      else if (k === ' ') { e.preventDefault(); app.togglePick(st.list[st.at]).then(caption); }
+      else if (k === 'p' || k === 'x') { e.preventDefault(); app.togglePick(st.list[st.at]).then(caption); }
       else if (k === 's') { e.preventDefault(); app.toggleSelect(st.list[st.at]).then(caption); }
     },
   };

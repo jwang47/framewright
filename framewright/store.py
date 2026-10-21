@@ -103,6 +103,17 @@ def record(shoot_dir: Path, rel: str, src: Path) -> None:
     tmp.replace(shoot_dir / STORE_FILE)
 
 
+def forget(shoot_dir: Path, rels: set[str]) -> None:
+    """Drop entries (as in "raw/L1030512.DNG") once their files are gone."""
+    files = read_manifest(shoot_dir, strict=True)
+    if not rels & files.keys():
+        return
+    kept = {k: v for k, v in files.items() if k not in rels}
+    tmp = shoot_dir / f"{STORE_FILE}.part"
+    tmp.write_text(json.dumps({"files": dict(sorted(kept.items()))}, indent=2) + "\n")
+    tmp.replace(shoot_dir / STORE_FILE)
+
+
 def stored(shoot_dir: Path, sub: str = "raw") -> dict[str, tuple[Path, float]]:
     """File name -> (its path on the store, capture time) for one subfolder."""
     configured = store_root()

@@ -127,7 +127,7 @@ export const app = {
   updateCounts() {
     $('#count').textContent = this.frames.filter(f => f.picked).length + this.clips.filter(c => c.picked).length;
     $('#total').textContent = this.frames.length + this.clips.length;
-    const n = this.frames.filter(f => f.selected).length;
+    const n = this.frames.filter(f => f.selected).length + this.clips.filter(c => c.selected).length;
     $('#postCount').hidden = !this.target;
     $('#postN').textContent = n;
     $('#postName').textContent = this.targetName();
@@ -161,6 +161,7 @@ export const app = {
     if (this.isClip(id)) return this.toggleClipPick(id);
     const f = this.frame(id);
     f.picked = !f.picked;
+    if (f.picked) f.rejected = false;
     library.paint(id);
     develop.paintStrip();
     this.updateCounts();
@@ -175,9 +176,53 @@ export const app = {
     }
   },
 
+  // Mark for deletion, or unmark. Marked items dim; the Marked filter's
+  // Move to Trash clears them out when space is needed.
+  async toggleReject(id) {
+    const x = this.frame(id) || this.clip(id);
+    if (!x) return;
+    const before = { picked: x.picked, rejected: x.rejected };
+    x.rejected = !x.rejected;
+    if (x.rejected) x.picked = false;
+    library.paint(id);
+    develop.paintStrip();
+    this.updateCounts();
+    try {
+      await this.post('/api/pick', { shoot: x.shoot, key: x.key, rejected: x.rejected });
+      this.status(x.rejected ? `marked ${x.key} for deletion` : `unmarked ${x.key}`);
+      if (library.filter() === 'rejects' && !x.rejected) library.render();
+    } catch {
+      Object.assign(x, before);
+      library.paint(id);
+      this.updateCounts();
+      this.status('save failed — is the server running?', 0);
+    }
+  },
+
+  async trashMarked() {
+    const marked = library.merged().filter(x => x.rejected);
+    if (!marked.length) return;
+    const where = marked.some(x => x.where === 'store') ? ` (${this.storeName} files go to its Trash)` : '';
+    if (!confirm(`Move ${marked.length} marked item${marked.length > 1 ? 's' : ''} to the Trash?${where}\nYou can put them back from the Trash in Finder.`)) return;
+    try {
+      const res = await this.post('/api/trash', { refs: marked.map(x => x.video ? x.id.slice(5) : x.id) });
+      const gone = new Set(marked.map(x => x.id));
+      this.frames = this.frames.filter(f => !gone.has(f.id));
+      this.clips = this.clips.filter(c => !gone.has(c.id));
+      if (gone.has(this.focusKey)) this.focusKey = library.merged()[0]?.id ?? null;
+      this.status(`moved ${res.trashed.length} to the Trash`, 4000);
+      await refreshMenus(`${this.view.kind}:${this.view.id}`);
+      library.render();
+      library.setFocus(this.focusKey, false);
+    } catch (e) {
+      this.status(`couldn't move to the Trash: ${e.message}`, 0);
+    }
+  },
+
   async toggleClipPick(id) {
     const c = this.clip(id);
     c.picked = !c.picked;
+    if (c.picked) c.rejected = false;
     library.paint(id);
     this.updateCounts();
     try {
@@ -193,9 +238,8 @@ export const app = {
 
   // Add to or take out of the target collection. New photos go last.
   async toggleSelect(id) {
-    if (this.isClip(id)) return this.status('collections hold photos; videos come with video editing', 3000);
     if (!this.target) return this.status('make a collection first: New collection', 3000);
-    const f = this.frame(id), name = this.targetName();
+    const f = this.frame(id) || this.clip(id), name = this.targetName();
     try {
       const res = await this.post('/api/select', {
         collection: this.target, shoot: f.shoot, key: f.key, selected: !f.selected,
@@ -208,12 +252,27 @@ export const app = {
     }
   },
 
+  // Every picked photo and clip shown here that isn't in the target collection yet.
+  async addPicks() {
+    if (!this.target) return this.status('make a collection first: New collection', 3000);
+    const refs = library.merged().filter(x => x.picked && !x.selected).map(x => x.video ? x.id.slice(5) : x.id);
+    if (!refs.length) return this.status(`every pick here is already in ${this.targetName()}`, 2500);
+    try {
+      const res = await this.post('/api/select', { collection: this.target, refs });
+      this.applySelects(res.selects);
+      updateCollectionCount(this.target, res.selects.length);
+      this.status(`added ${refs.length} pick${refs.length > 1 ? 's' : ''} to ${this.targetName()}`, 3000);
+    } catch (e) {
+      this.status(`save failed: ${e.message}`, 0);
+    }
+  },
+
   // Number every frame by its place in the post set (0 = not in it).
   applySelects(selects) {
     const order = new Map(selects.map((ref, i) => [ref, i + 1]));
-    for (const g of this.frames) {
+    for (const g of [...this.frames, ...this.clips]) {
       const was = g.selected;
-      g.selected = order.get(g.id) || 0;
+      g.selected = order.get(g.video ? g.id.slice(5) : g.id) || 0;
       if (g.selected !== was) library.paint(g.id);
     }
     this.updateCounts();
@@ -286,22 +345,19 @@ const library = {
 
   shown() {
     const f = this.filter();
-    if (f === 'post') return app.frames.filter(x => x.selected).sort((a, b) => a.selected - b.selected);
+    if (f === 'post') return [...app.frames, ...app.clips].filter(x => x.selected).sort((a, b) => a.selected - b.selected);
     if (f === 'photos') return app.frames;
     if (f === 'videos') return app.clips;
     const all = this.merged();
-    return f === 'picks' ? all.filter(x => x.picked) : all;
+    return f === 'picks' ? all.filter(x => x.picked) : f === 'rejects' ? all.filter(x => x.rejected) : all;
   },
 
-  // Photos and clips of a day in shooting order (photos keep their own order).
+  // Photos and clips in shooting order: by day, then time of day.
   merged() {
     if (!app.clips.length) return app.frames;
-    const out = [], clips = [...app.clips];
-    for (const f of app.frames) {
-      while (clips.length && clips[0].shoot === f.shoot && clips[0].time < f.time) out.push(clips.shift());
-      out.push(f);
-    }
-    return out.concat(clips);
+    const at = x => `${shootDate(x.shoot)} ${x.shoot} ${x.time}`;
+    return [...app.frames, ...app.clips].map((x, i) => [at(x), i, x])
+      .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] - b[1]).map(e => e[2]);
   },
 
   clipFigure(c) {
@@ -313,6 +369,7 @@ const library = {
       <div class="frame clip">
         <img loading="lazy" decoding="async" draggable="false" alt="${c.key}" src="/clipposter/${encodeURIComponent(c.shoot)}/${c.key}.jpg">
         <button class="star" aria-label="Pick ${c.key}"></button>
+        <span class="sel"></span>
         <span class="play" aria-hidden="true">▶</span>
         <span class="dur">${videos.clock(c.duration)}</span>
         ${c.captureFps || c.fps > 61 ? `<span class="hfr">${Math.round(c.captureFps || c.fps)}p</span>` : ''}
@@ -333,11 +390,6 @@ const library = {
     const byDay = app.isCollection() && !!app.view.days && this.filter() !== 'post';
     let day = null;
     for (const f of frames) {
-      if (f.video) {
-        $('#list').appendChild(this.clipFigure(f));
-        this.paint(f.id);
-        continue;
-      }
       if (byDay && f.shoot !== day) {
         day = f.shoot;
         const n = frames.filter(x => x.shoot === day).length;
@@ -345,6 +397,11 @@ const library = {
         h.className = 'day';
         h.innerHTML = `${dayLabel(day)} <span>${day} · ${n}</span>`;
         list.appendChild(h);
+      }
+      if (f.video) {
+        list.appendChild(this.clipFigure(f));
+        this.paint(f.id);
+        continue;
       }
       const fig = document.createElement('figure');
       fig.id = 'f-' + f.id;
@@ -378,7 +435,8 @@ const library = {
     if (!frames.length) {
       const clips = app.view?.kind === 'shoot' && app.clipCounts[app.view.id];
       const msg = { picks: 'Nothing picked yet.', post: 'Nothing in the post yet — press S on a photo to add it.',
-        videos: 'No videos on this day.', photos: clips ? 'No photos on this day.' : '' };
+        videos: 'No videos on this day.', photos: clips ? 'No photos on this day.' : '',
+        rejects: 'Nothing marked for deletion. Press ⌫ (or Z) on a photo or video to mark it.' };
       list.innerHTML = `<p class="empty">${msg[this.filter()] || (clips
         ? `No photos on this day, but ${clips} video${clips > 1 ? 's' : ''}. <button id="toVideos">Open Videos <kbd>T</kbd></button>`
         : 'No frames.')}</p>`;
@@ -389,6 +447,9 @@ const library = {
     for (const x of app.chosen) if (!shown.has(x)) app.chosen.delete(x);
     this.paintChosen();
     app.updateCounts();
+    const marked = frames.filter(x => x.rejected).length;
+    $('#trashMarked').hidden = this.filter() !== 'rejects' || !marked;
+    $('#trashMarked').textContent = `Move ${marked} to Trash…`;
   },
 
   paintClip(id) {
@@ -396,19 +457,25 @@ const library = {
     if (!c) return;
     if (fig) {
       fig.classList.toggle('picked', c.picked);
+      fig.classList.toggle('rejected', !!c.rejected);
       fig.classList.toggle('focus', id === app.focusKey);
       fig.querySelector('.star').textContent = c.picked ? '★' : '☆';
+      const sel = fig.querySelector('.sel');
+      sel.hidden = !c.selected;
+      sel.textContent = c.selected || '';
     }
     if (id === app.focusKey) {
       $('#loupeName').textContent = c.key;
       $('#loupeTime').textContent = c.time;
       const fps = c.captureFps ? `${Math.round(c.captureFps)}p slow motion` : c.fps ? `${c.fps}p` : '';
       $('#loupeTag').textContent = [videos.clock(c.duration), c.size, fps, videos.pretty(c.gamma),
-        app.whereText(c), c.online ? '' : 'offline'].filter(Boolean).join(' · ');
+        app.whereText(c), c.online ? '' : 'offline', c.rejected ? 'marked for deletion' : ''].filter(Boolean).join(' · ');
       $('#loupePick').textContent = c.picked ? '★ Picked' : '☆ Pick';
       $('#loupePick').setAttribute('aria-pressed', c.picked);
-      $('#loupePick').dataset.hotkey = 'X';
-      $('#loupeSel').hidden = $('#loupeDev').hidden = true;
+      $('#loupeDev').hidden = true;
+      $('#loupeSel').hidden = !app.target;
+      $('#loupeSel').textContent = c.selected ? `In collection #${c.selected}` : 'Add to collection';
+      $('#loupeSel').setAttribute('aria-pressed', !!c.selected);
       $('#loupeOpen').hidden = false;
       $('#loupeOpen').disabled = !c.online;
     }
@@ -421,6 +488,7 @@ const library = {
     const fig = document.getElementById('f-' + id);
     if (fig) {
       fig.classList.toggle('picked', f.picked);
+      fig.classList.toggle('rejected', !!f.rejected);
       fig.classList.toggle('focus', id === app.focusKey);
       fig.classList.toggle('chosen', app.chosen.has(id));
       fig.querySelector('.star').textContent = f.picked ? '★' : '☆';
@@ -438,12 +506,12 @@ const library = {
       $('#loupeTag').innerHTML = [
         f.raw && `<span class="src-tag ${source}">${f.edited ? 'edited from' : 'from'} ${SOURCE_LABEL[source]}</span>`,
         f.edited && !f.raw && 'edited', f.exported && 'exported', f.proposed && 'proposal waiting', app.whereText(f),
+        f.rejected && '<span class="rej-tag">marked for deletion</span>',
       ].filter(Boolean).join(' · ');
       $('#loupePick').textContent = f.picked ? '★ Picked' : '☆ Pick';
       $('#loupePick').setAttribute('aria-pressed', f.picked);
       $('#loupeSel').hidden = !app.target;
       $('#loupeDev').hidden = false;
-      $('#loupePick').dataset.hotkey = 'Space';
       $('#loupeOpen').hidden = true;
       $('#loupeSel').textContent = f.selected ? `In collection #${f.selected}` : 'Add to collection';
       $('#loupeSel').title = `${f.selected ? 'Remove from' : 'Add to'} ${app.targetName()} (S)`;
@@ -976,6 +1044,8 @@ $('#loupeBtn').addEventListener('click', e => {
   setLoupe($('#loupeBtn').getAttribute('aria-pressed') !== 'true');
 });
 $('#loupePick').addEventListener('click', e => { e.target.blur(); if (app.focusKey) app.togglePick(app.focusKey); });
+$('#trashMarked').addEventListener('click', e => { e.currentTarget.blur(); app.trashMarked(); });
+$('#addPicks').addEventListener('click', e => { e.currentTarget.blur(); app.addPicks(); });
 $('#loupeOpen').addEventListener('click', e => {
   e.target.blur();
   const c = app.clip(app.focusKey);
@@ -1119,14 +1189,15 @@ addEventListener('keydown', e => {
   }
   const k = e.key.toLowerCase();
   if (k === 'g' && app.tab !== 'library') return app.setTab('library');
-  if (k === 'p') { e.preventDefault(); return app.setTab('post'); }
+  // P picks (one-handed, right hand on the keyboard); ⇧P opens Post.
+  if (k === 'p' && e.shiftKey) { e.preventDefault(); return app.setTab('post'); }
   if (k === 't') { e.preventDefault(); return app.setTab('videos'); }
   if (app.tab === 'videos') {
     if (k === 'd') return app.focusKey && app.setTab('develop');
     return videos.onKey(e);
   }
   if (app.tab === 'library' && app.isClip(app.focusKey)) {
-    // Space plays a video, as everywhere else; X picks it.
+    // Space plays a video; P (or X) picks it, like everything else.
     if (k === ' ' || k === 'enter' || k === 'd') { e.preventDefault(); return videos.toggle(); }
     if (k === ',' || k === '.') { e.preventDefault(); return videos.step(k === '.' ? 1 : -1); }
   }
@@ -1134,6 +1205,7 @@ addEventListener('keydown', e => {
     if (app.focusKey) app.setTab('develop');
     return;
   }
+  if (k === 's' && e.shiftKey && app.tab === 'library') { e.preventDefault(); return app.addPicks(); }
   if (k === 's' && app.focusKey && app.tab !== 'post') return app.toggleSelect(app.focusKey);
   if (app.tab === 'develop') return develop.onKey(e);
   if (app.tab === 'post') return post.onKey(e);
@@ -1142,7 +1214,8 @@ addEventListener('keydown', e => {
   else if (k === 'arrowleft' || k === 'h') { e.preventDefault(); library.move(-1); }
   else if (k === 'arrowdown' || k === 'j') { e.preventDefault(); library.move(library.columns()); }
   else if (k === 'arrowup' || k === 'k') { e.preventDefault(); library.move(-library.columns()); }
-  else if (k === ' ' || k === 'x') { e.preventDefault(); if (app.focusKey) app.togglePick(app.focusKey); }
+  else if (k === 'p' || k === 'x') { e.preventDefault(); if (app.focusKey) app.togglePick(app.focusKey); }
+  else if (k === 'backspace' || k === 'delete' || k === 'z') { e.preventDefault(); if (app.focusKey) app.toggleReject(app.focusKey); }
   else if (k === 'f') setFilter(library.filter() === 'picks' ? 'all' : 'picks');
   else if ((k === '[' || k === ']') && library.filter() === 'post') nudgePost(k === ']' ? 1 : -1);
   else if (k === 'o') {
@@ -1160,7 +1233,10 @@ addEventListener('keydown', e => {
 // ⌘A chooses every frame shown, ⌘⇧S syncs settings to them, ⌘Z undoes a sync.
 function libraryShortcut(e) {
   const k = e.key.toLowerCase();
-  if (k === 'a') {
+  if (k === 'backspace') {
+    e.preventDefault();
+    if (app.focusKey) app.toggleReject(app.focusKey);
+  } else if (k === 'a') {
     e.preventDefault();
     const photos = library.visible().filter(id => !app.isClip(id));
     library.choose(photos);
@@ -1207,7 +1283,7 @@ function setTarget(slug) {
   post.hidden = !app.target;
   post.textContent = app.target ? `In ${app.targetName()}, in order (O)` : '';
   if (!app.target && $('#filter').value === 'post') $('#filter').value = 'all';
-  $('#renameCol').disabled = $('#deleteCol').disabled = !app.target;
+  $('#renameCol').disabled = $('#deleteCol').disabled = $('#addPicks').disabled = !app.target;
 }
 
 async function loadView(value, tab, frame) {
@@ -1216,11 +1292,12 @@ async function loadView(value, tab, frame) {
   const q = kind === 'collection' ? `collection=${encodeURIComponent(id)}` : `shoot=${encodeURIComponent(id)}`;
   const [data, clipData] = await Promise.all([
     fetch('/api/frames?' + q).then(r => r.json()),
-    kind === 'shoot' ? fetch('/api/clips?' + q).then(r => r.ok ? r.json() : { days: [] }) : { days: [] },
+    kind === 'shoot' ? fetch('/api/clips?' + q).then(r => r.ok ? r.json() : { days: [] }) : null,
   ]);
   app.view = { kind, id, name: data.name || id, days: data.days || null };
   app.frames = data.frames.map(f => ({ ...f, id: `${f.shoot}/${f.key}`, selected: 0 }));
-  app.clips = clipData.days.flatMap(d => d.clips).map(c => ({ ...c, id: `clip:${c.shoot}/${c.key}`, video: true }));
+  app.clips = (clipData ? clipData.days.flatMap(d => d.clips) : data.clips || [])
+    .map(c => ({ ...c, id: `clip:${c.shoot}/${c.key}`, video: true, selected: c.selected || 0 }));
   app.chosen = new Set();
   app.focusKey = app.frame(frame) || app.clip(frame) ? frame : (library.merged()[0] || {}).id || null;
   if (kind === 'collection') setTarget(id);
@@ -1452,6 +1529,10 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
   // Cheap presence check; the plan is only read when a card appears.
   async function poll() {
     if (running) return;
+    try { await check(); } catch { /* server restarting; try again next tick */ }
+  }
+
+  async function check() {
     const res = await (await fetch('/api/card')).json().catch(() => ({}));
     if (res.card === card) return;
     card = res.card || null;

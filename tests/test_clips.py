@@ -92,5 +92,61 @@ class ClipTests(unittest.TestCase):
         self.assertEqual(server.list_shoots(self.shoot.parent), [self.shoot.name])
 
 
+    def test_http_playback_and_clips_in_collections(self):
+        import threading
+        from http.client import HTTPConnection
+        from http.server import ThreadingHTTPServer
+        from framewright import server
+
+        self.clip(self.shoot / "video")
+
+        class TestHandler(server.Handler):
+            root = self.shoot.parent
+            def log_message(self, *_):
+                pass
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+
+        def request(method, path, body=None, headers=None):
+            connection = HTTPConnection(*httpd.server_address)
+            self.addCleanup(connection.close)
+            headers = {**({"Content-Type": "application/json"} if body is not None else {}), **(headers or {})}
+            connection.request(method, path, json.dumps(body) if body is not None else None, headers)
+            response = connection.getresponse()
+            return response.status, response.getheader("Content-Range"), response.read()
+
+        status, span, body = request("GET", f"/clip/{self.shoot.name}/C0001", headers={"Range": "bytes=10-19"})
+        self.assertEqual((status, span, len(body)), (206, "bytes 10-19/1000", 10))
+        self.assertEqual(request("GET", f"/clip/{self.shoot.name}/C0001", headers={"Range": "bytes=5000-"})[0], 416)
+
+        self.assertEqual(request("POST", "/api/collections/create", {"name": "Reel"})[0], 200)
+        ref = {"collection": "reel", "shoot": self.shoot.name, "key": "C0001", "selected": True}
+        self.assertEqual(request("POST", "/api/select", ref)[0], 200)
+        status, _, body = request("GET", "/api/collection?slug=reel")
+        listed = json.loads(body)
+        self.assertEqual(listed["items"], [f"{self.shoot.name}/C0001"])
+        self.assertEqual(listed["clipItems"], listed["items"])
+        status, _, body = request("GET", "/api/frames?collection=reel")
+        self.assertEqual([(c["key"], c["selected"]) for c in json.loads(body)["clips"]], [("C0001", 1)])
+
+        # Mark for deletion clears the pick; Move to Trash takes the clip, its
+        # sidecar and its collection entry, through the (stubbed) Trash.
+        pick = {"shoot": self.shoot.name, "key": "C0001"}
+        self.assertEqual(request("POST", "/api/pick", {**pick, "picked": True})[0], 200)
+        self.assertEqual(request("POST", "/api/pick", {**pick, "rejected": True})[0], 200)
+        self.assertFalse((self.shoot / "picks.txt").exists())
+        self.assertEqual((self.shoot / "rejects.txt").read_text(), "C0001\n")
+        trashed = []
+        with patch.object(server, "to_trash", lambda paths, _root: trashed.extend(p.name for p in paths)):
+            status, _, body = request("POST", "/api/trash", {"refs": [f"{self.shoot.name}/C0001"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(sorted(trashed), ["C0001.MP4", "C0001M01.XML"])
+        self.assertFalse((self.shoot / "rejects.txt").exists())
+        status, _, body = request("GET", "/api/collection?slug=reel")
+        self.assertEqual(json.loads(body)["items"], [])
+
 if __name__ == "__main__":
     unittest.main()

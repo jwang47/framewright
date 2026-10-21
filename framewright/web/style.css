@@ -563,3 +563,12 @@ main.grid .frame.clip img { aspect-ratio: 3 / 2; }
 .frame.clip .hfr { left: auto; right: 44px; }
 main.small .frame .where { display: none; }
 .frame.clip .where { right: auto; left: 4px; }
+
+/* marked for deletion */
+figure.rejected .frame img { opacity: .3; filter: grayscale(1); }
+figure.rejected .frame::after { content: '✕'; position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; color: #ff6b6b; font-size: 28px; font-weight: 300; pointer-events: none; }
+figure.rejected.is-clip .frame .play { display: none; }
+figure.rejected figcaption .name { color: #ff6b6b; text-decoration: line-through; }
+.rej-tag { color: #ff6b6b; }
+button.danger { border-color: #ff6b6b; color: #ff6b6b; }

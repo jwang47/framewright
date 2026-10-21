@@ -123,6 +123,7 @@ export function createVideos(app) {
     const c = find(x), fig = document.getElementById('v-' + x);
     if (!c || !fig) return;
     fig.classList.toggle('picked', c.picked);
+    fig.classList.toggle('rejected', !!c.rejected);
     fig.classList.toggle('focus', x === focus);
     fig.querySelector('.star').textContent = c.picked ? '★' : '☆';
     if (x === focus) {
@@ -310,6 +311,7 @@ export function createVideos(app) {
     const c = find(x);
     if (!c) return;
     c.picked = !c.picked;
+    if (c.picked) c.rejected = false;
     paint(x);
     try {
       await app.post('/api/pick', { shoot: c.shoot, key: c.key, picked: c.picked });
@@ -318,6 +320,23 @@ export function createVideos(app) {
       else $('#vidCount').textContent = $('#vidCount').textContent.replace(/\d+ picked$/, `${clips.filter(c => c.picked).length} picked`);
     } catch {
       c.picked = !c.picked;
+      paint(x);
+      app.status('save failed — is the server running?', 0);
+    }
+  }
+
+  async function toggleReject(x) {
+    const c = find(x);
+    if (!c) return;
+    const before = { picked: c.picked, rejected: c.rejected };
+    c.rejected = !c.rejected;
+    if (c.rejected) c.picked = false;
+    paint(x);
+    try {
+      await app.post('/api/pick', { shoot: c.shoot, key: c.key, rejected: c.rejected });
+      app.status(c.rejected ? `marked ${c.key} for deletion` : `unmarked ${c.key}`);
+    } catch {
+      Object.assign(c, before);
       paint(x);
       app.status('save failed — is the server running?', 0);
     }
@@ -380,7 +399,8 @@ export function createVideos(app) {
       else if (k === 'arrowdown' || k === 'j') { e.preventDefault(); move(columns()); }
       else if (k === 'arrowup' || k === 'k') { e.preventDefault(); move(-columns()); }
       else if (k === ' ' || k === 'enter') { e.preventDefault(); toggle(); }
-      else if (k === 'x') { e.preventDefault(); if (focus) togglePick(focus); }
+      else if (k === 'p' || k === 'x') { e.preventDefault(); if (focus) togglePick(focus); }
+      else if (k === 'backspace' || k === 'delete' || k === 'z') { e.preventDefault(); if (focus) toggleReject(focus); }
       else if (k === ',' || k === '.') { e.preventDefault(); step(k === '.' ? 1 : -1); }
       else if (k === 'f') { $('#vidFilter').value = filter() === 'picks' ? 'all' : 'picks'; render(); }
       else if (k === 'o') action('open');

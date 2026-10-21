@@ -12,7 +12,7 @@
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="library" aria-selected="true">Library <kbd>G</kbd></button>
     <button role="tab" data-tab="develop" aria-selected="false">Develop <kbd>D</kbd></button>
-    <button role="tab" data-tab="post" aria-selected="false" aria-keyshortcuts="P">Post <kbd>P</kbd></button>
+    <button role="tab" data-tab="post" aria-selected="false" aria-keyshortcuts="Shift+P">Post <kbd>⇧P</kbd></button>
     <button role="tab" data-tab="videos" aria-selected="false" aria-keyshortcuts="T">Videos <kbd>T</kbd></button>
   </nav>
   <select id="shoot" aria-label="Collection or day"></select>
@@ -84,12 +84,14 @@
       <option value="picks">Picks (F)</option>
       <option value="photos">Photos only</option>
       <option value="videos">Videos only</option>
+      <option value="rejects">Marked for deletion</option>
       <option value="post" hidden></option>
     </select>
     <label class="zoom">Size <kbd>−</kbd>
       <input type="range" id="zoom" min="70" max="360" step="10" value="120" aria-label="Thumbnail size">
       <kbd>+</kbd></label>
     <span class="chosen-n" id="chosenN" hidden></span>
+    <button id="trashMarked" class="danger" hidden title="Move every marked photo and video to the Trash (Put Back restores them)">Move to Trash…</button>
     <button id="loupeBtn" aria-pressed="true">Preview <kbd>E</kbd></button>
     <span class="colctl">
       <label for="target">Collection</label>
@@ -97,18 +99,21 @@
       <button id="newCol" title="New collection">New</button>
       <button id="renameCol" title="Rename the target collection">Rename</button>
       <button id="deleteCol" title="Delete the target collection (photos stay)">Delete</button>
+      <button id="addPicks" data-hotkey="⇧S" title="Add every picked photo and video here to the collection (⇧S)">Add picks</button>
     </span>
     <details class="shortcut-help">
       <summary>Shortcuts</summary>
       <div class="shortcut-list">
         <kbd>H J K L / arrows</kbd><span>Move between photos</span>
-        <kbd>Space / X</kbd><span>Pick / unpick a photo</span>
+        <kbd>P / X</kbd><span>Pick / unpick a photo or video</span>
         <kbd>S</kbd><span>Add to / remove from collection</span>
+        <kbd>⇧S</kbd><span>Add all picks here to the collection</span>
+        <kbd>⌫ / Z</kbd><span>Mark / unmark for deletion</span>
         <kbd>O</kbd><span>Cycle All / Picks / Collection</span>
         <kbd>[ ] / drag</kbd><span>Reorder collection</span>
-        <kbd>G / D / P</kbd><span>Library / Develop / Post</span>
+        <kbd>G / D / ⇧P / T</kbd><span>Library / Develop / Post / Videos</span>
         <kbd>I / V</kbd><span>Inspect at 1:1 / highlight fine edges</span>
-        <kbd>Space / Enter</kbd><span>Play / pause a video (X picks it)</span>
+        <kbd>Space / Enter</kbd><span>Play / pause a video</span>
       </div>
     </details>
   </div>
@@ -136,7 +141,7 @@
         <span class="name" id="loupeName"></span>
         <span id="loupeTime"></span>
         <span class="tag" id="loupeTag"></span>
-        <button id="loupePick" data-hotkey="Space" aria-keyshortcuts="Space">☆ Pick</button>
+        <button id="loupePick" data-hotkey="P" aria-keyshortcuts="P X">☆ Pick</button>
         <button id="loupeSel" data-hotkey="S" aria-keyshortcuts="S" hidden>Add to collection</button>
         <button id="loupeSync" data-hotkey="⌘⇧S" aria-keyshortcuts="Meta+Shift+S Control+Shift+S" hidden title="Copy this frame's look and settings to every chosen frame (⌘⇧S)"></button>
         <button id="loupeDev" data-hotkey="D" aria-keyshortcuts="D">Develop</button>
@@ -164,10 +169,11 @@
         <kbd>H J K L / arrows</kbd><span>Move between clips</span>
         <kbd>Space / Enter</kbd><span>Play / pause</span>
         <kbd>, .</kbd><span>Step one frame back / forward</span>
-        <kbd>X</kbd><span>Pick / unpick</span>
+        <kbd>P / X</kbd><span>Pick / unpick</span>
+        <kbd>⌫ / Z</kbd><span>Mark / unmark for deletion</span>
         <kbd>F</kbd><span>Show picks only</span>
         <kbd>O / R</kbd><span>Open in player / reveal in Finder</span>
-        <kbd>G / D / P / T</kbd><span>Library / Develop / Post / Videos</span>
+        <kbd>G / D / ⇧P / T</kbd><span>Library / Develop / Post / Videos</span>
       </div>
     </details>
   </div>
@@ -193,7 +199,7 @@
         <span id="vidTime"></span>
         <span class="vid-meta" id="vidMeta"></span>
         <button id="vidLog" aria-pressed="true" hidden title="Show log footage with an approximate display conversion (viewing only, not a grade)">Log preview</button>
-        <button id="vidPick" data-hotkey="X">☆ Pick</button>
+        <button id="vidPick" data-hotkey="P">☆ Pick</button>
         <button id="vidOpen" data-hotkey="O" title="Open in the default video player">Open</button>
         <button id="vidReveal" data-hotkey="R" title="Reveal in Finder">Reveal</button>
       </div>
@@ -293,7 +299,7 @@
       </div>
       <div class="row">
         <button id="gridBtn" data-hotkey="O" aria-keyshortcuts="O" aria-pressed="false" title="Cycle grid overlay (O)">Grid: off</button>
-        <button id="crossBtn" data-hotkey="X" aria-keyshortcuts="X" aria-pressed="false" title="Centre crosshair (X)">Crosshair</button>
+        <button id="crossBtn" data-hotkey="⇧X" aria-keyshortcuts="Shift+X" aria-pressed="false" title="Centre crosshair (⇧X)">Crosshair</button>
       </div>
       <label class="check"><input type="checkbox" id="lensOn"> Lens profile <span id="lensInfo"></span></label>
       <div id="sliders-geo"></div>
@@ -388,7 +394,7 @@
         <button id="dSend" title="Export, then send to this destination">Send to</button>
         <select id="dDevice" aria-label="Send destination"></select>
       </div>
-      <p class="hint">O grid · X crosshair · M mask overlay · C clipping · ⇧M all masks · \ before/after · H/L or ←/→ frames · +/− zoom · 0 fit · ⌘Z undo · double-click a slider to reset it</p>
+      <p class="hint">O grid · P pick · ⇧X crosshair · M mask overlay · C clipping · ⇧M all masks · \ before/after · H/L or ←/→ frames · +/− zoom · 0 fit · ⌘Z undo · double-click a slider to reset it</p>
     </aside>
     <div class="strip" id="strip"></div>
   </div>
@@ -433,7 +439,7 @@
 
       <div class="row">
         <button id="pGrid" data-hotkey="O" aria-keyshortcuts="O" aria-pressed="false" title="Grid in each tile (O)">Grid: off</button>
-        <button id="pCross" data-hotkey="X" aria-keyshortcuts="X" aria-pressed="false" title="Crosshair in each tile (X)">Crosshair</button>
+        <button id="pCross" data-hotkey="⇧X" aria-keyshortcuts="Shift+X" aria-pressed="false" title="Crosshair in each tile (⇧X)">Crosshair</button>
       </div>
 
       <h3 id="slideTitle">Slide</h3>

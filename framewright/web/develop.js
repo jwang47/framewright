@@ -2101,7 +2101,7 @@ export function createDevelop(app) {
     else if (k === 'w') setPicking(!st.picking);
     else if (st.proposal && ['1', '2', '3'].includes(k)) showCompare(['original', 'yours', 'proposed'][+k - 1]);
     else if (k === 'o') cycleGrid();
-    else if (k === 'x') toggleCrosshair();
+    else if (k === 'x' && e.shiftKey) toggleCrosshair();
     else if (k === 'c') toggleClip();
     else if (k === '=' || k === '+') { e.preventDefault(); setZoom(zoom.factor + 1); }
     else if (k === '-' || k === '_') { e.preventDefault(); setZoom(zoom.factor - 1); }
@@ -2114,7 +2114,7 @@ export function createDevelop(app) {
     else if (k === 'escape' && st.picking) setPicking(false);
     else if ((k === 'enter' || k === 'escape') && st.cropMode) setCropMode(false);
     else if (k === 'escape' && st.active) activate(null);
-    else if (k === ' ') { e.preventDefault(); if (st.key) app.togglePick(st.key); }
+    else if (k === 'p' || k === 'x') { e.preventDefault(); if (st.key) app.togglePick(st.key); }
   }
 
   return {

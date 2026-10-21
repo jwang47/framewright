@@ -127,11 +127,17 @@ offers importing automatically when a card connects and ejecting afterwards.
 
 The **Library** shows a day's photos and clips together in shooting order;
 filter to photos or videos only. **Videos** (T) lists clips for a day or the
-whole library with a player (Space plays, X picks, `,`/`.` step frames), and
+whole library with a player (Space plays, P picks, `,`/`.` step frames), and
 Open/Reveal hand a clip to QuickTime or Finder. With ffmpeg installed, clips
 get poster frames; S-Log clips show through an approximate display conversion
 (viewing only, toggle with **Log preview**). An SSD or Mac tag on each item
 says whether its file is on the store or in the library.
+
+P (or X) picks a photo or video and ⌫ (or Z) marks it for deletion; marked
+items dim, and the **Marked for deletion** filter has **Move to Trash…** for
+when space runs low (files go to the Trash, so Finder can put them back). S
+adds the selected photo or clip to the target collection and **Add picks**
+(⇧S) adds every pick in view. A post's slides use the collection's photos.
 Windows detection checks removable drive types. CLI import can also read any
 explicit source folder:
 

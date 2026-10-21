@@ -154,7 +154,7 @@ def shot_at(meta: dict, path: Path, shoot_dir: Path) -> datetime:
         return datetime.fromtimestamp(when)
 
 
-def list_clips(shoot_dir: Path, picks: set[str]) -> list[dict]:
+def list_clips(shoot_dir: Path, picks: set[str], rejects: frozenset[str] | set[str] = frozenset()) -> list[dict]:
     """A shoot's clips in recording order, for the Videos tab."""
     out = []
     for key, path in clip_files(shoot_dir).items():
@@ -162,7 +162,8 @@ def list_clips(shoot_dir: Path, picks: set[str]) -> list[dict]:
         when = shot_at(meta, path, shoot_dir)
         out.append({"shoot": shoot_dir.name, "key": key, "name": path.name,
                     "at": when.isoformat(timespec="seconds"), "time": when.strftime("%H:%M:%S"),
-                    "picked": key in picks, "online": path.is_file(), "log": is_log(meta),
+                    "picked": key in picks, "rejected": key in rejects,
+                    "online": path.is_file(), "log": is_log(meta),
                     "where": "local" if path.parent.parent == shoot_dir else "store",
                     **{k: v for k, v in meta.items() if k != "created"}})
     return sorted(out, key=lambda c: (c["at"], c["key"]))
