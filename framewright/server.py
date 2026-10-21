@@ -2647,8 +2647,7 @@ def main(argv: list[str] | None = None) -> int:
         load_config()  # Report malformed config before starting the supervisor.
         args.port = configured_port(args.port)
         library = resolve_library(args.library)
-        if library is not None:
-            library.mkdir(parents=True, exist_ok=True)
+        library.mkdir(parents=True, exist_ok=True)
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -2659,7 +2658,7 @@ def main(argv: list[str] | None = None) -> int:
     Handler.root = library
     ThreadingHTTPServer.allow_reuse_address = True   # restart straight onto the same port
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"library: {Handler.root}" if library else "choose a library folder in the browser")
+    print(f"library: {Handler.root}")
     print(f"serving {url}  (ctrl-c to stop; boot {BOOT_ID})", flush=True)
     if not args.no_browser:
         webbrowser.open(url)

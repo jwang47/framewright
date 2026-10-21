@@ -45,10 +45,11 @@ class LibraryStoreTests(unittest.TestCase):
                 patch.object(Path, "is_dir", return_value=False):
             self.assertFalse(store.store_mounted(root))
 
-    def test_unconfigured_import_requires_library(self):
-        with patch.object(import_photos, "resolve_library", return_value=None):
-            with self.assertRaisesRegex(import_photos.ImportError_, "no library configured"):
-                import_photos.default_library()
+    def test_unconfigured_import_uses_home_library(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.dict(os.environ, {"STUDIO_CONFIG": str(Path(tmp) / "none.json")}, clear=True), \
+                patch.object(Path, "home", return_value=Path(tmp)):
+            self.assertEqual(import_photos.default_library(), (Path(tmp) / "Pictures" / "Framewright").resolve())
 
     def test_import_uses_selected_library_even_with_shoots_subfolder(self):
         with tempfile.TemporaryDirectory() as tmp:

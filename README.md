@@ -20,9 +20,10 @@ Requires **Python 3.10+** and a current browser with WebGL2. From a checkout:
 python -m framewright
 ```
 
-The app opens at http://localhost:8765. On first run, enter an absolute library
-folder path. A new empty folder works. A library contains shoot folders directly:
-if migrating from the personal tool, select its existing `shoots/` folder.
+The app opens at http://localhost:8765. Without a configured library it uses
+`~/Pictures/Framewright`, created on first run. A library contains shoot folders
+directly: if migrating from the personal tool, pass its existing `shoots/` folder
+with `--library` or set `"library"` in the config.
 
 ```sh
 python -m framewright --library /path/to/library
@@ -62,9 +63,10 @@ code restarts the server and saving page code reloads the window, as with
 
 ## Settings and storage
 
-Library selection is `--library`, then `$STUDIO_LIBRARY`, then saved config.
-There is no Git-checkout fallback. The importer and renderer use the same order;
-without a configured library they print a setup error.
+Library selection is `--library`, then `$STUDIO_LIBRARY`, then saved config,
+then `~/Pictures/Framewright` in your home folder. Edits, picks, proposals and
+previews are saved there, never in the Git checkout. The importer and renderer
+use the same order.
 
 The server keeps an in-memory photo index for day counts, search and source
 lookups. The first request scans the library; subsequent requests reuse each

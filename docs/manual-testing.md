@@ -4,10 +4,10 @@ Automated tests use synthetic inputs. Use a separate test library and disposable
 copies on a test card/source folder for import, deletion and offload checks.
 The following checks exercise real camera/OS behavior that fixtures cannot prove.
 
-- [ ] **Fresh start:** launch `python -m framewright` without saved config. Choose
-  an empty folder. The Library tab shows import guidance; restart and confirm
-  the selected folder persists. Override it with `--library` and confirm no
-  files are written to the app checkout.
+- [ ] **Fresh start:** launch `python -m framewright` without saved config.
+  Confirm it creates and uses `~/Pictures/Framewright` and the Library tab shows
+  import guidance. Override it with `--library` and confirm no files are written
+  to the app checkout.
 - [ ] **Install:** `pipx install PATH_TO_WHEEL`; run `framewright --version` and
   open the app from a working directory outside its checkout.
 - [ ] **RAW and JPEG:** open matching frames from each camera you use. Switch

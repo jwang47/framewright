@@ -2,8 +2,9 @@
 
 The application and the user's library are separate. Code belongs in this
 repository; photos, recipes, picks, exports, LUTs and proposals belong under the
-library selected by `--library`, `STUDIO_LIBRARY`, or the user's config. Do not
-assume a drive, camera model, shoot name, or default personal library exists.
+library selected by `--library`, `STUDIO_LIBRARY`, or the user's config, which
+otherwise defaults to `~/Pictures/Framewright` and never the checkout. Do not
+assume a drive, camera model, shoot name, or personal library exists.
 
 ## Editing a photograph
 
