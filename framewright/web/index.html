@@ -42,6 +42,7 @@
     <button id="offloadBtn" class="card-btn subtle" hidden>Offload</button>
   </div>
 </nav>
+<div class="split v nav-split" data-split="nav" role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
 <div class="work">
 <header class="top">
   <nav class="tabs" role="tablist" aria-label="Workspace">
@@ -162,6 +163,7 @@
   </div>
   <div class="lib">
     <main id="list" class="grid"></main>
+    <div class="split v" data-split="library" role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
     <aside class="loupe" id="loupe">
       <div class="loupe-stage" id="loupeStage">
         <canvas id="loupeView" role="button" tabindex="0" aria-label="Photo preview. Click to zoom in; drag to pan when zoomed."></canvas>
@@ -242,6 +244,7 @@
   </div>
   <div class="lib with-loupe">
     <main id="vidList" class="grid"></main>
+    <div class="split v" data-split="cut" role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
     <aside class="loupe">
       <div class="loupe-stage vid-stage" id="vidStage">
         <video id="vidPlayer" playsinline preload="auto"></video>
@@ -271,6 +274,7 @@
       <div class="empty" id="vidEmpty" hidden>No clip selected.</div>
     </aside>
   </div>
+  <div class="split h" data-split="timeline" role="separator" aria-orientation="horizontal" title="Drag to resize · double-click to reset"></div>
   <div class="cut-timeline" id="cutTrack">
     <div class="cut-transport">
       <button id="cutPlay" aria-label="Play the cut" title="Play the cut (Space in timeline)">▶</button>
@@ -387,6 +391,7 @@
       <div class="badge right" id="maskOffBadge" hidden>Masks hidden</div>
       <div class="empty" id="devEmpty" hidden>Pick a frame in the Library, or choose one below.</div>
     </div>
+    <div class="split v dev-split" data-split="develop" role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
     <aside class="panel" id="panel">
       <div class="scope" id="scope">
         <canvas id="hist" width="256" height="80" aria-label="Histogram" title="Click to show clipping on the photo (C)"></canvas>

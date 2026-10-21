@@ -2058,6 +2058,53 @@ function bytes(n) {
   return n >= 2 ** 40 ? `${(n / 2 ** 40).toFixed(1)} TB` : n >= 2 ** 30 ? `${Math.round(n / 2 ** 30)} GB` : `${Math.round(n / 2 ** 20)} MB`;
 }
 
+// --- draggable dividers ----------------------------------------------------------
+//
+// Each divider sets one CSS size, remembered per divider; double-click resets.
+
+const SPLITS = {
+  nav: { el: () => document.documentElement, prop: '--nav', axis: 'x', min: 160, max: 380 },
+  library: { el: () => $('#library .lib'), prop: '--list-w', axis: 'x', min: 200, max: () => innerWidth - 420 },
+  cut: { el: () => $('#videos .lib'), prop: '--list-w', axis: 'x', min: 200, max: () => innerWidth - 420 },
+  develop: { el: () => $('#develop .dev'), prop: '--side', axis: 'x', sign: -1, min: 240, max: 560 },
+  timeline: { el: () => $('#videos'), prop: '--clip-h', axis: 'y', sign: -1, min: 36, max: 300 },
+};
+
+for (const handle of document.querySelectorAll('[data-split]')) {
+  const name = handle.dataset.split, cfg = SPLITS[name], key = `studio.split.${name}`;
+  const apply = px => cfg.el().style.setProperty(cfg.prop, `${px}px`);
+  const saved = +stored(key, 0);
+  if (saved) apply(saved);
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    const target = cfg.el(), start = cfg.axis === 'x' ? e.clientX : e.clientY;
+    const current = parseFloat(getComputedStyle(target).getPropertyValue(cfg.prop)) ||
+      (name === 'timeline' ? 72 : name === 'library' || name === 'cut' ? target.querySelector('main').offsetWidth : 0);
+    const max = typeof cfg.max === 'function' ? cfg.max() : cfg.max;
+    document.body.classList.add(cfg.axis === 'x' ? 'resizing-x' : 'resizing-y');
+    let px = current;
+    const move = ev => {
+      const d = ((cfg.axis === 'x' ? ev.clientX : ev.clientY) - start) * (cfg.sign || 1);
+      px = Math.round(Math.max(cfg.min, Math.min(max, current + d)));
+      apply(px);
+      window.dispatchEvent(new Event('resize'));
+    };
+    const up = () => {
+      removeEventListener('mousemove', move);
+      removeEventListener('mouseup', up);
+      document.body.classList.remove('resizing-x', 'resizing-y');
+      store(key, px);
+    };
+    addEventListener('mousemove', move);
+    addEventListener('mouseup', up);
+  });
+  handle.addEventListener('dblclick', () => {
+    cfg.el().style.removeProperty(cfg.prop);
+    store(key, '');
+    window.dispatchEvent(new Event('resize'));
+  });
+}
+
 // --- sidebar ---------------------------------------------------------------------
 
 function paintNav() {

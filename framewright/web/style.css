@@ -789,3 +789,22 @@ main.grid > figure { content-visibility: auto; contain-intrinsic-size: auto 100p
 .music-form input[type=number] { width: 80px; background: var(--panel2); color: var(--text); border: 1px solid var(--line2); border-radius: 6px; padding: 4px 6px; }
 .card-rename { margin-left: auto; padding: 1px 7px; font-size: 11px; font-weight: 400; background: transparent; color: var(--muted); }
 .card-empty { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* Draggable dividers. */
+.split { flex: none; position: relative; z-index: 6; background: transparent; }
+.split.v { width: 5px; margin: 0 -2px; cursor: col-resize; }
+.split.h { height: 5px; margin: -2px 0; cursor: row-resize; }
+.split:hover, .resizing-x .split.v:active, .resizing-y .split.h:active { background: rgba(240,167,58,.35); }
+.split.v::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--line); }
+.split.h::after { content: ''; position: absolute; left: 0; right: 0; top: 2px; height: 1px; background: var(--line); }
+.resizing-x, .resizing-x * { cursor: col-resize !important; user-select: none; }
+.resizing-y, .resizing-y * { cursor: row-resize !important; user-select: none; }
+.lib.with-loupe > main { flex: 0 0 var(--list-w, clamp(260px, 38%, 640px)) !important; border-right: 0 !important; }
+.lib:not(.with-loupe) > .split { display: none; }
+.lib.cards-mode > .split { display: none; }
+.side { border-right: 0; }
+.dev { position: relative; }
+.dev-split { position: absolute; top: 0; bottom: 0; right: calc(var(--side) - 2px); margin: 0; }
+.cut-blocks { height: var(--clip-h, 72px); }
+.cut-timeline { border-top: 0; }
+@media (max-width: 900px) { .nav-split { display: none; } }
