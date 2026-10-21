@@ -1984,16 +1984,28 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     paintTotal();
   }
 
+  // Only worth showing when something on the Mac could move: a quiet line
+  // with how much, checked now and then rather than every poll.
+  let pendingMb = null, checkedAt = 0;
   function label(st) {
     const pct = st.bytes_total ? st.bytes / st.bytes_total : 0;
-    btn.textContent = st.running ? `Offloading ${Math.round(pct * 100)}%` : `Offload to ${drive}`;
+    btn.textContent = st.running ? `Offloading ${Math.round(pct * 100)}%`
+      : pendingMb ? `Move ${mb(pendingMb)} to ${drive}` : `Offload to ${drive}`;
+  }
+  async function checkPending() {
+    if (Date.now() - checkedAt < 30000) return;
+    checkedAt = Date.now();
+    const res = await (await fetch('/api/offload?plan=1')).json().catch(() => ({}));
+    pendingMb = (res.shoots || []).reduce((n, s) => n + s.mb, 0);
   }
 
   async function poll() {
     if (document.hidden || running || busy) return;
     const res = await (await fetch('/api/offload')).json().catch(() => ({}));
     drive = res.drive;
-    btn.hidden = !res.configured || (!res.mounted && !res.state?.running);
+    if (res.state?.running) checkedAt = 0;      // recount once it finishes
+    else if (res.mounted) await checkPending();
+    btn.hidden = !res.configured || (!res.mounted && !res.state?.running) || (!res.state?.running && !pendingMb);
     btn.title = `Move photos to ${drive}, keeping picks, edits and previews here`;
     if (res.state?.running) watch();   // one started in another window
     else label(res.state || {});

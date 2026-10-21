@@ -860,3 +860,6 @@ main.grid > figure { content-visibility: auto; contain-intrinsic-size: auto 100p
 .nav-collapsed .card-head { justify-content: center; }
 .nav-collapsed .card-box svg, .nav-collapsed .drive-row svg { width: 20px; height: 20px; }
 .reloaded-at { color: var(--muted); opacity: .6; font: 11px var(--mono); white-space: nowrap; flex-shrink: 0; }
+/* Offload: a quiet line, shown only when something on the Mac could move. */
+.side #offloadBtn { border: 0; background: transparent; color: var(--muted); font-size: 12px; padding: 4px 10px; text-align: left; }
+.side #offloadBtn:hover { color: var(--text); }
