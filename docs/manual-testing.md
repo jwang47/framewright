@@ -44,9 +44,8 @@ The following checks exercise real camera/OS behavior that fixtures cannot prove
   File manager remains available.
 - [ ] **Post and masks:** create a collection, arrange slides, use a subject
   mask, export and reopen. Confirm accepted edits and layout persist.
-- [ ] **Other platforms:** repeat the relevant checks on macOS, Linux and
-  Windows, especially removable-drive detection, paths containing spaces,
-  browser discovery and preview behavior without ImageMagick.
+- [ ] **Edge cases:** check removable-drive detection, paths containing
+  spaces, browser discovery and preview behavior without ImageMagick.
 
 When reporting a failure, include the OS, browser, camera make/model, command or
 UI action, and displayed error. Use synthetic inputs or describe the issue

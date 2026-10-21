@@ -14,13 +14,15 @@ The demo uses a generated test image; no personal photographs or third-party LUT
 
 ## Run
 
-Requires **Python 3.10+** and a current browser with WebGL2. From a checkout:
+Framewright runs on **macOS** for now; other platforms are not supported or
+tested. It requires **Python 3.10+** and a current browser with WebGL2. From a
+checkout:
 
 ```sh
 python -m framewright
 ```
 
-On a Mac, `./dev` does the same and installs Python with Homebrew first if it
+`./dev` does the same and installs Python with Homebrew first if it
 is missing. `./dev app` opens this checkout in the Mac app window instead,
 installing the Xcode command line tools and building the app when needed.
 Other arguments pass through, as in `./dev --library /path/to/library`.
@@ -88,8 +90,7 @@ affected days on the next lookup. Files modified in place are rechecked within
 is rebuilt after a server restart and does not write into the photo library.
 
 Config lives at `$XDG_CONFIG_HOME/framewright/config.json` (default
-`~/.config/framewright/config.json`) on macOS/Linux, or
-`%APPDATA%/framewright/config.json` on Windows. `$STUDIO_CONFIG` overrides the
+`~/.config/framewright/config.json`). `$STUDIO_CONFIG` overrides the
 config file location. The `STUDIO_*` environment names remain supported for
 compatibility. Example:
 
@@ -113,8 +114,7 @@ a mounted drive. `$STUDIO_STORE` overrides it; `$PHOTO_STORE` remains accepted.
 Offload appears when the store is available. It copies and verifies each file,
 records it in the shoot manifest, then removes the library copy. Aliases of the
 source and conflicting destination contents are refused. Unmounted removable
-paths under `/Volumes`, `/media` and `/run/media` cannot silently redirect
-writes onto the internal disk. Windows drive roots must be available too.
+paths under `/Volumes` cannot silently redirect writes onto the internal disk.
 
 With a store disconnected, manifests keep frames listed and cached previews
 available. Editing the original RAW or exporting full resolution requires the
@@ -163,8 +163,7 @@ items dim, and the **Marked for deletion** filter has **Move to Trash…** for
 when space runs low (files go to the Trash, so Finder can put them back). S
 adds the selected photo or clip to the target collection and **Add picks**
 (⇧S) adds every pick in view. A post's slides use the collection's photos.
-Windows detection checks removable drive types. CLI import can also read any
-explicit source folder:
+CLI import can also read any explicit source folder:
 
 ```sh
 framewright import --source /path/to/card --library /path/to/library --dry-run
@@ -183,8 +182,7 @@ skipping an entire frame. Different bytes at the same destination are refused.
 **Delete from card after verified copy** is off by default. If enabled, cleanup
 waits until the complete selected batch succeeds, then rechecks each destination
 before removing its copied source. Skipped and unrecognized files stay on the
-card. `--no-delete-from-card` overrides a saved deletion preference. Eject is
-available on macOS; use the operating system's eject control elsewhere.
+card. `--no-delete-from-card` overrides a saved deletion preference.
 
 **Send** exports the selected scope, then either reveals it in the local file
 manager or sends it to a Tailscale device. Taildrop targets appear only when
@@ -208,9 +206,7 @@ an sRGB LUT at the profile's own amount; any other settings it carries
 
 Search order is `$STUDIO_LUTS` (platform-separated folder list), config `luts`,
 the user LUT folder, then `<library>/luts`. The user folder is
-`~/Library/Application Support/framewright/luts` on macOS,
-`$XDG_CONFIG_HOME/framewright/luts` (default `~/.config/framewright/luts`) on
-Linux, and `%APPDATA%/framewright/luts` on Windows.
+`~/Library/Application Support/framewright/luts`.
 
 New LUT looks carry `lutHash`, the first 16 hex digits of SHA256. Resolution
 prefers that fingerprint across all search folders, then the filename. Missing
@@ -271,8 +267,8 @@ python tools/check_release.py --all
 python -m framewright schema --out framewright/recipe.schema.json
 ```
 
-Node 22 is only used for tests. CI runs Python 3.10 and 3.12 on macOS, Linux
-and Windows, builds/inspects distribution files, and checks a wheel installation
+Node 22 is only used for tests. CI runs Python 3.10 and 3.12 on macOS, runs the
+full RAW smoke test, builds/inspects distribution files, and checks a wheel installation
 outside the checkout. An opt-in full RAW smoke test generates a synthetic DNG:
 set `STUDIO_RAW_SMOKE=1` when running the tests with a supported browser installed.
 No test fixtures require personal photographs or licensed LUTs.

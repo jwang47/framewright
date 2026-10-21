@@ -14,7 +14,7 @@ authors = [{name = "Framewright contributors"}]
 dependencies = []
 classifiers = [
   "Programming Language :: Python :: 3",
-  "Operating System :: OS Independent",
+  "Operating System :: MacOS",
   "Topic :: Multimedia :: Graphics :: Editors",
 ]
 

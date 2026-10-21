@@ -7,7 +7,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest]
         python: ['3.10', '3.12']
     runs-on: ${{ matrix.os }}
     steps:
@@ -22,7 +22,7 @@ jobs:
       - run: node --test tests/luts.test.mjs tests/segment.test.mjs tests/raw-worker.test.mjs
       - run: python tools/check_release.py --all
       - name: Full RAW browser smoke
-        if: runner.os == 'Linux' && matrix.python == '3.12'
+        if: matrix.python == '3.12'
         env:
           STUDIO_RAW_SMOKE: '1'
         run: python -m unittest discover -s tests -p test_raw_smoke.py -v
