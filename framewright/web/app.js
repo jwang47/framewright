@@ -1629,7 +1629,7 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
 // options. Optionally imports as soon as a card appears and ejects it after.
 (function cardImport() {
   const btn = $('#importBtn'), dlg = $('#importDlg'), go = $('#importGo'), bar = $('#busy');
-  let card = null, groups = [], running = false, deleteInitialized = false, error = null, dest = null, many = false;
+  let card = null, cards = [], groups = [], running = false, deleteInitialized = false, error = null, dest = null, many = false;
   const auto = $('#importAuto'), autoEject = $('#importAutoEject');
   auto.checked = stored('studio.autoImport', '0') === '1';
   autoEject.checked = stored('studio.autoEject', '0') === '1';
@@ -1667,7 +1667,8 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     many = (res.cards || []).length > 1;
     $('#importCard').textContent = card;
     $('#importEject').hidden = !res.eject;
-    $('#importFormat').hidden = !res.eject || !!res.error || (res.groups || []).length > 0 || (res.cards || []).length !== 1;
+    $('#importFormat').hidden = !res.eject || !!res.error || (res.groups || []).length > 0;
+    cards = res.cards || [];
     const total = groups.reduce((t, g) => t + g.mb, 0);
     $('#importPlan').innerHTML = res.error ? `<p class="none">${res.error}</p>`
       : !groups.length ? '<p class="none">Everything on this card is already in the library.</p>'
@@ -1802,11 +1803,14 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
   // Format: offered once everything on the card is in the library. The server
   // re-checks every file by hash before erasing, and wants the name typed.
   $('#importFormat').addEventListener('click', async () => {
-    const name = (card || '').split(', ')[0];
-    const typed = prompt(`Erase everything on "${name}"? Framewright first checks that every photo and clip on it is safely in the library, then formats it (keeping its name). Files Framewright doesn't import are erased too.\n\nType the card's name to confirm:`);
+    // With several cards connected, the name typed picks which one.
+    const which = cards.length > 1 ? `one of: ${cards.join(', ')}` : `"${cards[0]}"`;
+    const typed = prompt(`Erase everything on ${which}? Framewright first checks that every photo and clip on the card is safely in the library, then formats it (keeping its name). Files Framewright doesn't import are erased too.\n\nType the name of the card to format:`);
     if (typed === null) return;
+    const name = typed.trim();
+    if (!cards.includes(name)) return app.status(`no connected card is called "${name}"`, 4000);
     try {
-      await app.post('/api/card/format', { card: name, confirm: typed.trim() });
+      await app.post('/api/card/format', { card: name, confirm: name });
       let st;
       do {
         await new Promise(r => setTimeout(r, 700));
