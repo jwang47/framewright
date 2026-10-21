@@ -11,6 +11,7 @@ import { createPost } from './post.js';
 import { createFullscreen } from './fullscreen.js';
 import { createSync } from './sync.js';
 import { createVideos } from './videos.js';
+import { createCut } from './cut.js';
 import { Renderer, loadBitmap, lutsReady, normalize, orientedSize } from './render.js';
 import { sourceOf, loadSource, prefetch, release, paintSourceTag, SOURCE_LABEL } from './source.js';
 
@@ -165,6 +166,7 @@ export const app = {
       renderCollections();
     } else if (tab === 'videos') {
       videos.show(this.clip(this.focusKey));
+      cut.show();
     } else if (tab === 'library') {
       library.render();
       // After layout, so the selected thumbnail is scrolled into view.
@@ -1263,6 +1265,7 @@ const develop = createDevelop(app);
 const post = createPost(app);
 const fullscreen = createFullscreen(app);
 const videos = createVideos(app);
+const cut = createCut(app, videos);
 const sync = createSync(app, {
   onSaved(f, params) {
     f.edited = params !== null;
@@ -1305,6 +1308,7 @@ addEventListener('keydown', e => {
   if (fullscreen.isOpen) return fullscreen.onKey(e);
   if (e.target.matches?.('input, select, textarea') || document.querySelector('dialog[open]')) return;
   if (e.key.toLowerCase() === 'f' && e.shiftKey && !e.metaKey && !e.ctrlKey) { e.preventDefault(); return openFullscreen(); }
+  if (app.tab === 'videos' && cut.onKey(e)) return;
   if (e.metaKey || e.ctrlKey || e.altKey) {
     if (app.tab === 'develop') develop.onKey(e);
     else if (app.tab === 'library' && !e.altKey) libraryShortcut(e);

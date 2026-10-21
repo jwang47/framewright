@@ -103,6 +103,7 @@ from .import_photos import (  # noqa: E402
 from .store import drive_name, forget, read_manifest, store_mounted, stored  # noqa: E402
 from .trash import to_trash  # noqa: E402
 from . import clips  # noqa: E402
+from . import cuts  # noqa: E402
 from .settings import configured_port, configured_store, resolve_library, save_library, load_config, import_settings  # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "web"
@@ -213,7 +214,7 @@ MASK_RANGES = {
 BOOT_ID = uuid.uuid4().hex[:8]
 HERE = Path(__file__).resolve().parent
 SERVER_CODE = (HERE / "server.py", HERE / "lenses.py", HERE / "import_photos.py", HERE / "store.py", HERE / "settings.py",
-               HERE / "clips.py")
+               HERE / "clips.py", HERE / "cuts.py", HERE / "trash.py")
 
 
 def mtimes(paths) -> dict[str, float]:
@@ -1106,6 +1107,7 @@ def run_offload(root: Path, shoots: list[str]) -> None:
 # erase the card's own volume, keeping its file system and name. macOS only.
 
 _format: dict = {"running": False}
+_cut_export: dict = {"running": False}
 
 
 def card_volume(card: Path) -> dict:
@@ -1360,6 +1362,25 @@ class Handler(BaseHTTPRequestHandler):
 
         if parts == ["api", "import"]:
             self.send_json(dict(_import))
+            return
+
+        if parts == ["api", "cuts"]:
+            self.send_json({"cuts": cuts.list_cuts(self.root)})
+            return
+
+        if parts == ["api", "cut"]:
+            try:
+                cut = cuts.read_cut(self.root, query.get("slug", [""])[0])
+            except ValueError:
+                cut = None
+            if cut is None:
+                self.send_json({"error": "no such cut"}, HTTPStatus.NOT_FOUND)
+                return
+            self.send_json({"cut": cut})
+            return
+
+        if parts == ["api", "cut", "export"]:
+            self.send_json({k: v for k, v in _cut_export.items() if k != "pid"})
             return
 
         if parts == ["api", "card", "format"]:
@@ -1839,6 +1860,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.api_import(json.loads(self.read_body() or b"{}"))
             elif url.path == "/api/eject":
                 self.api_eject()
+            elif url.path == "/api/cut/save":
+                self.api_cut_save(json.loads(self.read_body()))
+            elif url.path == "/api/cut/delete":
+                body = json.loads(self.read_body())
+                with _write_lock:
+                    cuts.cut_path(self.root, str(body.get("slug", ""))).unlink(missing_ok=True)
+                self.send_json({"ok": True})
+            elif url.path == "/api/cut/export":
+                self.api_cut_export(json.loads(self.read_body()))
+            elif url.path == "/api/cut/reveal":
+                cuts.reveal(Path(_cut_export.get("path", "")))
+                self.send_json({"ok": True})
             elif url.path == "/api/card/format":
                 self.api_format(json.loads(self.read_body() or b"{}"))
             elif url.path == "/api/offload":
@@ -1960,6 +1993,35 @@ class Handler(BaseHTTPRequestHandler):
                             phase="planning", error=None, current=None)
         threading.Thread(target=run_offload, args=(self.root, shoots), daemon=True).start()
         self.send_json(_offload)
+
+    def api_cut_save(self, body: dict) -> None:
+        """Save a cut (new, or under its old slug, renaming if the name changed)."""
+        cut = cuts.clean_cut(body.get("cut"))
+        for c in cut["clips"]:
+            if not self.clip(c["shoot"], c["key"]):
+                self.send_json({"error": f"no such clip: {c['shoot']}/{c['key']}"}, HTTPStatus.NOT_FOUND)
+                return
+        old = body.get("slug") or None
+        with _write_lock:
+            if old is None and cuts.cut_path(self.root, cuts.slugify(cut["name"])).exists():
+                self.send_json({"error": f"there is already a cut called {cut['name']}"}, HTTPStatus.CONFLICT)
+                return
+            slug = cuts.write_cut(self.root, cut, old)
+        self.send_json({"slug": slug, "cut": cuts.read_cut(self.root, slug)})
+
+    def api_cut_export(self, body: dict) -> None:
+        slug = str(body.get("slug", ""))
+        size, codec = str(body.get("size", "1080")), str(body.get("codec", "h264"))
+        if size not in cuts.SIZES or codec not in cuts.CODECS:
+            raise ValueError("unknown size or codec")
+        with _import_lock:
+            if _cut_export.get("running"):
+                self.send_json({"error": "an export is already running"}, HTTPStatus.CONFLICT)
+                return
+            _cut_export.clear()
+            _cut_export.update(running=True, slug=slug, progress=0.0, error=None)
+        threading.Thread(target=cuts.export, args=(self.root, slug, size, codec, _cut_export), daemon=True).start()
+        self.send_json({k: v for k, v in _cut_export.items() if k != "pid"})
 
     def api_format(self, body: dict) -> None:
         """Erase one card, named in the request, once all of it is imported."""

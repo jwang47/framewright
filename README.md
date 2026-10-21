@@ -136,7 +136,7 @@ Select and Add to collection. **Collections** shows every collection as a card,
 dated by the date you set on it or else the latest day it covers. The header
 switches workspaces: Library, Develop (photos) and Cut (video; Enter on a clip).
 After an import, **Format card…** erases the card for reuse, but only after
-re-checking every file on it against the library. **Cut** lists clips for a day with a player (Space plays, P picks, `,`/`.` step frames), and
+re-checking every file on it against the library. **Cut** assembles clips into an edit saved as `<library>/cuts/<name>.cut.json`: mark a clip's in and out with I and O, press E to add it, drag to reorder or trim, B splits at the playhead, ⌫ removes, ⌘Z undoes, and **Export…** renders an MP4 to `export/cuts/` with ffmpeg (S-Log3 converted to Rec.709 when on). Its clip bin lists a day's clips with a player (Space plays, P picks, `,`/`.` step frames), and
 Open/Reveal hand a clip to QuickTime or Finder. With ffmpeg installed, clips
 get poster frames; S-Log clips show through an approximate display conversion
 (viewing only, toggle with **Log preview**). An SSD or Mac tag on each item

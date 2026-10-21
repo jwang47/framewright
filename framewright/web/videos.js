@@ -48,7 +48,7 @@ export function createVideos(app) {
   const video = $('#vidPlayer'), canvas = $('#vidGL');
   let days = [], clips = [], focus = null, loaded = null, gl = null, tex = null, uLog = null;
   let scope = stored('studio.videoScope', 'day'), logView = stored('studio.logView', '1') === '1';
-  let token = 0, current = null;
+  let token = 0, current = null, focusHook = null;
   // The player can be lent to the Library's preview pane; this is where it lives.
   const home = $('#vidStage').parentElement, homeBefore = $('#vidStage').nextElementSibling?.nextElementSibling;
 
@@ -146,6 +146,7 @@ export function createVideos(app) {
     if (scroll) document.getElementById('v-' + x)?.scrollIntoView({ block: 'nearest' });
     if (loaded !== x) open(c);
     meta(c);
+    focusHook?.(c);
   }
 
   function meta(c) {
@@ -393,6 +394,10 @@ export function createVideos(app) {
     lend(host, c) { attach(host); if (loaded !== id(c)) open(c); },
     toggle,
     step,
+    // For the Cut workspace (cut.js): the source clip, and loading any clip.
+    current: () => current,
+    openClip(c) { loaded = id(c); open(c); },
+    onFocus(fn) { focusHook = fn; },
     pause() { video.pause(); },
     fullscreen() { $('#vidFs').click(); },
     log() { return logView; },
@@ -410,7 +415,6 @@ export function createVideos(app) {
       else if (k === 'backspace' || k === 'delete' || k === 'z') { e.preventDefault(); if (focus) toggleReject(focus); }
       else if (k === ',' || k === '.') { e.preventDefault(); step(k === '.' ? 1 : -1); }
       else if (k === 'f') { $('#vidFilter').value = filter() === 'picks' ? 'all' : 'picks'; render(); }
-      else if (k === 'o') action('open');
       else if (k === 'r') action('reveal');
     },
   };

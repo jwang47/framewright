@@ -192,6 +192,14 @@
 </section>
 
 <section id="videos" class="tab" role="tabpanel" hidden>
+  <div class="cut-bar">
+    <select id="cutPick" aria-label="Cut"></select>
+    <div class="cut-title"><strong id="cutName">No cut yet</strong><span class="hint"><span id="cutStats"></span> · <span id="cutState">saved</span></span></div>
+    <button id="cutRename">Rename</button>
+    <span class="push-right"></span>
+    <button id="cutLog" aria-pressed="true" title="Convert S-Log3 clips to display gamma in the export (approximate, not a grade)">Log → Rec.709</button>
+    <button id="cutExport" class="primary">Export…</button>
+  </div>
   <div class="toolbar">
     <select id="vidScope" aria-label="Which videos">
       <option value="day">This day</option>
@@ -211,8 +219,14 @@
         <kbd>P / X</kbd><span>Pick / unpick</span>
         <kbd>⌫ / Z</kbd><span>Mark / unmark for deletion</span>
         <kbd>F</kbd><span>Show picks only</span>
-        <kbd>O / R</kbd><span>Open in player / reveal in Finder</span>
-        <kbd>G / D / ⇧P / T</kbd><span>Library / Develop / Post / Videos</span>
+        <kbd>I / O</kbd><span>Mark the source clip's in / out</span>
+        <kbd>E</kbd><span>Add the marked range to the cut</span>
+        <kbd>B</kbd><span>Split at the playhead</span>
+        <kbd>⌫</kbd><span>Delete the selected timeline clip (ripple)</span>
+        <kbd>← → (timeline)</kbd><span>Move the playhead a frame (⇧: a second)</span>
+        <kbd>⌘Z / ⇧⌘Z</kbd><span>Undo / redo</span>
+        <kbd>R</kbd><span>Reveal in Finder</span>
+        <kbd>G / D / ⇧P / T</kbd><span>Library / Develop / Post / Cut</span>
       </div>
     </details>
   </div>
@@ -245,6 +259,19 @@
       <div class="empty" id="vidEmpty" hidden>No clip selected.</div>
     </aside>
   </div>
+  <div class="cut-timeline" id="cutTrack">
+    <div class="cut-transport">
+      <button id="cutPlay" aria-label="Play the cut" title="Play the cut (Space in timeline)">▶</button>
+      <span class="cut-mode source" id="cutMode">Source</span>
+      <span class="hint mono" id="cutTime">0:00 / 0:00</span>
+      <span class="hint" id="cutMarks"></span>
+    </div>
+    <div class="cut-area" id="cutTrackArea">
+      <div class="cut-ruler" id="cutRuler"></div>
+      <div class="cut-blocks" id="cutBlocks"></div>
+      <div class="cut-head" id="cutHead"></div>
+    </div>
+  </div>
 </section>
 
 <section id="collections" class="tab" role="tabpanel" hidden>
@@ -260,6 +287,22 @@
   </div>
   <main id="colGrid" class="col-grid"></main>
 </section>
+
+<dialog id="cutExportDlg" aria-labelledby="cutExportTitle">
+  <h2 id="cutExportTitle">Export <span id="cutExportName"></span></h2>
+  <div class="cut-export-opts">
+    <label>Size <select id="cutExportSize"><option value="1080" selected>1080p</option><option value="2160">4K (2160p)</option><option value="720">720p</option><option value="source">Source</option></select></label>
+    <label>Codec <select id="cutExportCodec"><option value="h264" selected>H.264</option><option value="hevc">HEVC</option></select></label>
+  </div>
+  <progress id="cutExportBar" max="1" value="0"></progress>
+  <div class="hint" id="cutExportNow"></div>
+  <p class="hint">Renders to the library's export/cuts folder.</p>
+  <div class="dlg-actions">
+    <button id="cutExportReveal" hidden>Reveal in Finder</button>
+    <button id="cutExportClose">Close</button>
+    <button id="cutExportGo" class="primary">Export</button>
+  </div>
+</dialog>
 
 <section id="develop" class="tab" role="tabpanel" hidden>
   <div class="dev">
