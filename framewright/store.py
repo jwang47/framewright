@@ -88,15 +88,21 @@ def read_manifest(shoot_dir: Path, *, strict: bool = False) -> dict[str, dict]:
         return {}
 
 
-def record(shoot_dir: Path, rel: str, src: Path) -> None:
-    """Note that rel (as in "raw/L1030512.DNG") now lives on the store."""
+def record(shoot_dir: Path, rel: str, src: Path, sha256: str | None = None) -> None:
+    """Note that rel (as in "raw/L1030512.DNG") now lives on the store.
+
+    sha256 is the file's fingerprint when the caller already has it (a
+    verified copy computes one); otherwise src is read to take it.
+    """
     files = read_manifest(shoot_dir, strict=True)
     st = src.stat()
-    digest = hashlib.sha256()
-    with src.open("rb") as handle:
-        while chunk := handle.read(8 * 1024 * 1024):
-            digest.update(chunk)
-    files[rel] = {"size": st.st_size, "mtime": round(st.st_mtime, 3), "sha256": digest.hexdigest()}
+    if sha256 is None:
+        digest = hashlib.sha256()
+        with src.open("rb") as handle:
+            while chunk := handle.read(8 * 1024 * 1024):
+                digest.update(chunk)
+        sha256 = digest.hexdigest()
+    files[rel] = {"size": st.st_size, "mtime": round(st.st_mtime, 3), "sha256": sha256}
     shoot_dir.mkdir(parents=True, exist_ok=True)
     tmp = shoot_dir / f"{STORE_FILE}.part"
     tmp.write_text(json.dumps({"files": dict(sorted(files.items()))}, indent=2) + "\n")

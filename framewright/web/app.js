@@ -1740,9 +1740,17 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     return st;
   }
 
+  // Renaming remounts the card, so it waits while the card is being read.
+  function lockRename(busy, why) {
+    $('#cardRename').disabled = busy;
+    $('#cardRename').title = busy ? `Unavailable during ${why}: renaming remounts the card, which would interrupt it`
+      : 'Rename the card itself (shows in Finder and on any computer)';
+  }
+
   async function run() {
     if (running) return;
     running = true;
+    lockRename(true, 'an import');
     go.disabled = $('#importJpeg').disabled = $('#importDelete').disabled = true;
     $('#importProgress').hidden = false;
     btn.classList.add('importing');
@@ -1775,6 +1783,7 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       notify('Import stopped', e.message);
     } finally {
       running = false;
+      lockRename(false);
       document.title = 'Framewright';
       $('#importCancel').hidden = $('#cardCancel').hidden = true;
       bar.classList.remove('on', 'determinate');
@@ -1815,6 +1824,7 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     if (!name || !cards.includes(name)) return;
     const label = labels[name]?.label || name;
     $('#importProgress').hidden = false;
+    lockRename(true, 'the check');
     try {
       await app.post('/api/card/verify', { card: name });
       let st;
@@ -1846,6 +1856,7 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     }
     bar.classList.remove('on', 'determinate');
     $('#cardBar').hidden = true;
+    lockRename(false);
     native({ type: 'import', running: false, progress: 0 });
     label && loadPlan().then(() => {}).catch(() => {});
   });

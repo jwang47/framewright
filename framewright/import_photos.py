@@ -493,8 +493,8 @@ def plan(
 # --- copying -----------------------------------------------------------------
 
 
-def copy_verified(src: Path, dest_dir: Path) -> None:
-    """Copy one file and confirm the bytes landed intact.
+def copy_verified(src: Path, dest_dir: Path) -> str:
+    """Copy one file, confirm the bytes landed intact, and return their SHA-256.
 
     Writes to a .part file first so an interrupted run cannot leave a
     truncated frame that later looks already-imported.
@@ -514,8 +514,9 @@ def copy_verified(src: Path, dest_dir: Path) -> None:
         if same:
             raise ImportError_(f"source and destination are the same file: {src}")
     if dest.exists():
-        if file_hash(dest) == file_hash(src):
-            return
+        digest = file_hash(src)
+        if file_hash(dest) == digest:
+            return digest
         raise ImportError_(f"destination already contains a different file: {dest}")
     dest_dir.mkdir(parents=True, exist_ok=True)
     # A stale partial may be a symlink/hardlink. Remove the directory entry
@@ -538,6 +539,7 @@ def copy_verified(src: Path, dest_dir: Path) -> None:
 
     shutil.copystat(src, tmp)
     tmp.replace(dest)
+    return src_hash.hexdigest()
 
 
 def place(src: Path, dest: Path, to_store: bool, delete_from_card: bool = False) -> None:
@@ -553,9 +555,11 @@ def place(src: Path, dest: Path, to_store: bool, delete_from_card: bool = False)
         return
     shoot_dir, kind = dest.parent, dest.name
     remote = require_store() / shoot_dir.name / kind
-    copy_verified(src, remote)
+    digest = copy_verified(src, remote)
     (shoot_dir / "raw").mkdir(parents=True, exist_ok=True)
-    record(shoot_dir, f"{kind}/{src.name}", src)
+    # The fingerprint from the copy itself: reading the card again for it
+    # halved import speed over slow links (a camera's USB, say).
+    record(shoot_dir, f"{kind}/{src.name}", src, digest)
     if delete_from_card:
         delete_verified_source(src, dest, True)
 

@@ -158,6 +158,23 @@ class CameraImportTests(unittest.TestCase):
             self.assertEqual(self.plan()[dest], [raw])
         self.assertIn("sha256", store.read_manifest(dest.parent)["raw/frame.JPG"])
 
+    def test_store_import_reads_the_card_once(self):
+        source = self.media("frame.JPG", b"photograph")
+        remote = self.base / "store"
+        remote.mkdir()
+        dest = self.library / "shoot" / "raw"
+        reads = []
+        real_open = Path.open
+        def counting_open(path, *args, **kwargs):
+            if path == source and "b" in (args[0] if args else kwargs.get("mode", "r")) and "x" not in (args[0] if args else ""):
+                reads.append(path)
+            return real_open(path, *args, **kwargs)
+        with patch.object(store, "configured_store", return_value=remote), patch.object(Path, "open", counting_open):
+            importer.place(source, dest, True)
+        self.assertEqual(len(reads), 1)
+        import hashlib
+        self.assertEqual(store.read_manifest(dest.parent)["raw/frame.JPG"]["sha256"], hashlib.sha256(b"photograph").hexdigest())
+
     def test_conflicting_destination_does_not_overwrite_or_delete_card(self):
         source = self.media("frame.JPG", b"new bytes")
         dest = self.library / "shoot" / "raw"

@@ -1962,7 +1962,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 _volume_info.pop(str(card), None)
                 if _import.get("running") or _verify.get("running"):
-                    self.send_json({"error": "wait for the import or check to finish"}, HTTPStatus.CONFLICT)
+                    self.send_json({"error": "can't rename during an import or check: renaming remounts the card, "
+                                             "which would interrupt it"}, HTTPStatus.CONFLICT)
                     return
                 rename_card(card, clean_card_name(body.get("name")))
                 self.send_json({"ok": True})
@@ -2148,7 +2149,9 @@ class Handler(BaseHTTPRequestHandler):
     def api_verify(self, body: dict) -> None:
         """Check that everything on a card is safely in the library."""
         cards = {c.name: c for c in plugged_cards()}
-        card = cards.get(str(body.get("card", ""))) or (next(iter(cards.values())) if len(cards) == 1 else None)
+        name = body.get("card")
+        # With no card named, the one plugged in; a named card must be there.
+        card = cards.get(str(name)) if name else (next(iter(cards.values())) if len(cards) == 1 else None)
         if card is None:
             self.send_json({"error": "that card is not plugged in"}, HTTPStatus.CONFLICT)
             return
