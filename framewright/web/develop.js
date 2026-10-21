@@ -49,6 +49,10 @@ const SLIDERS = [
   { g: 'film', k: 'halation', label: 'Halation', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
   { g: 'film', k: 'bloom', label: 'Bloom', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
   { g: 'film', k: 'halationSize', label: 'Glow size', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}`, neutral: 30 },
+  { g: 'film', k: 'filmResponse', label: 'Film response', min: 0, max: 100, step: 1, fmt: v => `${Math.round(v)}` },
+  { g: 'film', k: 'filmContrast', label: 'Print contrast', min: -100, max: 100, step: 1 },
+  { g: 'film', k: 'filmLatitude', label: 'Latitude', min: -100, max: 100, step: 1 },
+  { g: 'film', k: 'filmCrossover', label: 'Crossover', min: -100, max: 100, step: 1 },
 ];
 // Sliders that move pixels around: they refit the crop and show the guide grid.
 const WARPS = ['angle', 'vertical', 'horizontal', 'distortion', 'groundShift', 'skyShift', 'horizon', 'groundFeather'];

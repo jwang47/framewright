@@ -5,6 +5,7 @@ export const DEFAULTS = {
   exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
   temp: 0, tint: 0, vibrance: 0, saturation: 0, vignette: 0, grain: 0, grainSize: 25, angle: 0,
   grainRoughness: 0, grainColor: 0, halation: 0, halationSize: 30, bloom: 0,
+  filmResponse: 0, filmContrast: 0, filmLatitude: 0, filmCrossover: 0,
   sharpen: 0, sharpenRadius: 1, noise: 0, colorNoise: 0,
   curve: null, splitShadowHue: 0, splitShadowSat: 0, splitHighlightHue: 0, splitHighlightSat: 0, splitBalance: 0,
   vertical: 0, horizontal: 0, distortion: 0, groundShift: 0, skyShift: 0, horizon: 50,
@@ -20,7 +21,7 @@ export const DEFAULTS = {
 // result, so tweaking one never changes the other.
 export const LOOK_KEYS = ['temp', 'tint', 'contrast', 'highlights', 'shadows', 'whites', 'blacks',
   'vibrance', 'saturation', 'vignette', 'grain', 'grainSize', 'grainRoughness', 'grainColor',
-  'halation', 'halationSize', 'bloom', 'curve',
+  'halation', 'halationSize', 'bloom', 'filmResponse', 'filmContrast', 'filmLatitude', 'filmCrossover', 'curve',
   'splitShadowHue', 'splitShadowSat', 'splitHighlightHue', 'splitHighlightSat', 'splitBalance', 'lut', 'lutHash'];
 
 // A look's settings: only the look fields, with the curve tidied.
@@ -498,6 +499,8 @@ uniform float grainRough, grainColor;  // 0..1: clumping and a finer layer; each
 uniform int useGlow;
 uniform sampler2D glowTex;
 uniform float halation, bloom;    // 0..1
+uniform float filmAmount;         // 0..1: how much of the film response replaces the plain one
+uniform vec3 filmShape;           // its contrast, latitude and crossover, -1..1
 uniform float pxSize;             // one output pixel, in frame long sides
 uniform float seed;
 uniform int linearSrc;       // 1: the source is decoded raw, already linear
@@ -532,6 +535,20 @@ const float KEYSTONE = 0.6;   // slider 100 -> strength of the perspective tilt
 const float LENS = 0.25;      // slider 100 -> radial correction at the corners
 const float GROUND = 0.2;     // slider 100 -> bottom edge moves a fifth of the width
 const vec3 HALATION = vec3(1.0, 0.3, 0.1);   // its colour at full strength
+// The film response, in stops (log2 exposure) from mid-grey. Our own model,
+// tuned by eye; not measured from or fitted to any film stock.
+const float FILM_GREY = 0.18;
+const vec3 NEG_TOE = vec3(-6.0, -6.2, -6.4);       // where each layer's density bottoms out: red first, so deep shadows cool
+const vec3 NEG_SHOULDER = vec3(5.0, 4.7, 4.3);     // and tops out: blue first, so overexposure warms
+const float NEG_SOFT = 0.8;                        // stops over which each eases in
+const vec3 NEG_CROSS = vec3(0.12, 0.0, -0.12);     // each layer's change of gamma at crossover 1
+const float DYE_COUPLING = 0.12;                   // each layer's development holds back the others'
+const float PRINT_GAMMA = 1.05;
+const float PRINT_OFFSET = 0.15;                   // a print exposed a touch bright
+const float PRINT_WHITE = 2.4739312;               // log2(1 / 0.18): paper white
+const float PRINT_BLACK = -7.0;                    // the paper's deepest black
+const vec3 PRINT_SHOULDER = vec3(0.42, 0.45, 0.5); // highlight knee per layer, stops
+const float PRINT_TOE = 1.0;
 
 vec3 toLinear(vec3 c) {
   return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
@@ -714,6 +731,38 @@ vec3 filmGrain(vec3 rgb, vec2 q) {
   return pow(Pc, vec3(2.2));
 }
 
+// --- film response ---------------------------------------------------------------
+// A negative and a print, per dye layer, in place of the plain response: the
+// negative records each layer's exposure as density along a straight line
+// with a soft toe and shoulder; the layers hold each other back a little (dye
+// coupling); the print turns density back into light with its own contrast,
+// easing into paper white and the paper's black. Pushing exposure walks the
+// highlights into the shoulder, so they compress and warm instead of clipping.
+vec3 softplus(vec3 z) {
+  return max(z, 0.0) + log(1.0 + exp(-abs(z)));
+}
+// v, easing into a floor lo and a ceiling hi over kl and kh stops.
+vec3 softRange(vec3 v, vec3 lo, vec3 hi, vec3 kl, vec3 kh) {
+  v = lo + kl * softplus((v - lo) / kl);
+  return hi - kh * softplus((hi - v) / kh);
+}
+// Stops from mid-grey to display-linear light. ct, lat, xo: -1..1.
+vec3 filmCurve(vec3 x, float ct, float lat, float xo) {
+  float soft = exp2(lat);
+  vec3 d = softRange(x * (1.0 + xo * NEG_CROSS), NEG_TOE - lat, NEG_SHOULDER + lat,
+                     vec3(NEG_SOFT * soft), vec3(NEG_SOFT * soft));
+  d += DYE_COUPLING * (d - (d.r + d.g + d.b) / 3.0);
+  vec3 v = d * PRINT_GAMMA * exp2(0.6 * ct) + PRINT_OFFSET;
+  v = softRange(v, vec3(PRINT_BLACK), vec3(PRINT_WHITE), vec3(PRINT_TOE * soft), PRINT_SHOULDER * soft);
+  return FILM_GREY * exp2(v);
+}
+vec3 filmResponse(vec3 rgb, vec3 shape) {
+  vec3 y = filmCurve(log2(max(rgb, vec3(1e-6)) / FILM_GREY), shape.x, shape.y, shape.z);
+  // The film base, what an unexposed frame prints as, comes off so black stays black.
+  vec3 y0 = filmCurve(vec3(-24.0), shape.x, shape.y, shape.z);
+  return max((y - y0) / (1.0 - y0), 0.0);
+}
+
 // How much of the ground shift applies at pixel p: 1 inside the area polygon,
 // 0 outside, with a soft band across the edge so there is no seam.
 float areaWeight(vec2 p) {
@@ -876,6 +925,7 @@ void main() {
   // Halation: light through the film base reflects back into the red layer,
   // a warm glow round bright highlights. Bloom is the same glow, neutral.
   if (useGlow == 1) rgb += texture(glowTex, t).rgb * (halation * HALATION + bloom * 0.6);
+  vec3 scene = rgb;
   if (useProfile == 1) {
     // The camera's tone curve, after exposure so pulling exposure down brings
     // back highlights the JPEG had already clipped.
@@ -885,6 +935,8 @@ void main() {
     rgb = vec3(texture(baseCurve, vec2(u.r, 0.5)).r, texture(baseCurve, vec2(u.g, 0.5)).r,
                texture(baseCurve, vec2(u.b, 0.5)).r);
   }
+  // Film takes the scene's light before any camera curve: it is the curve.
+  if (filmAmount > 0.0) rgb = mix(rgb, filmResponse(scene, filmShape), filmAmount);
   rgb = tone(rgb, contrast, highlights, shadows, whites, blacks);
   rgb = presence(rgb, saturation, vibrance);
   if (useCurve == 1 || splitShadow != vec3(0.0) || splitHigh != vec3(0.0))
@@ -1037,7 +1089,7 @@ export class Renderer {
     this.u = {};
     for (const name of ['img', 'srcSize', 'crop', 'viewport', 'angle', 'vertical', 'horizontal', 'distortion', 'groundShift', 'skyShift', 'horizon', 'areaCount', 'areaPts', 'areaFeather', 'lensK', 'lensScale', 'orient', 'flipH', 'flipV', 'maskCount', 'maskType', 'maskGeo', 'maskShift',
       'maskTex0', 'maskTex1', 'maskTex2', 'maskTex3', 'maskTex4', 'maskTex5', 'maskTex6', 'maskTex7', 'maskAngle', 'maskFalloff', 'maskOpt', 'maskAdjA', 'maskAdjB', 'showMask', 'exposure', 'contrast', 'highlights',
-      'shadows', 'whites', 'blacks', 'temp', 'tint', 'vibrance', 'saturation', 'vignette', 'grain', 'grainSize', 'grainRough', 'grainColor', 'useGlow', 'glowTex', 'halation', 'bloom', 'pxSize', 'seed', 'curveLut', 'useCurve', 'splitShadow', 'splitHigh', 'splitPivot', 'useLook', 'lookAmount', 'lookWb', 'lookTone', 'lookBlacks', 'lookPresence', 'lookCurve', 'lookSplitShadow', 'lookSplitHigh', 'lookSplitPivot', 'useLut', 'lut', 'lutMin', 'lutScale', 'lutSize', 'linearSrc', 'useProfile', 'camMatrix', 'baseCurve', 'baseLog', 'useWarp', 'warpKr', 'warpCentre', 'sharpen', 'sharpenRadius', 'noiseLuma', 'noiseColor']) {
+      'shadows', 'whites', 'blacks', 'temp', 'tint', 'vibrance', 'saturation', 'vignette', 'grain', 'grainSize', 'grainRough', 'grainColor', 'useGlow', 'glowTex', 'halation', 'bloom', 'filmAmount', 'filmShape', 'pxSize', 'seed', 'curveLut', 'useCurve', 'splitShadow', 'splitHigh', 'splitPivot', 'useLook', 'lookAmount', 'lookWb', 'lookTone', 'lookBlacks', 'lookPresence', 'lookCurve', 'lookSplitShadow', 'lookSplitHigh', 'lookSplitPivot', 'useLut', 'lut', 'lutMin', 'lutScale', 'lutSize', 'linearSrc', 'useProfile', 'camMatrix', 'baseCurve', 'baseLog', 'useWarp', 'warpKr', 'warpCentre', 'sharpen', 'sharpenRadius', 'noiseLuma', 'noiseColor']) {
       this.u[name] = gl.getUniformLocation(prog, name);
     }
     this.lut = gl.createTexture();
@@ -1372,6 +1424,12 @@ export class Renderer {
     gl.uniform1f(this.u.grainSize, (ownGrain ? p.grainSize : L.grainSize) / 100);
     gl.uniform1f(this.u.grainRough, (ownGrain ? p.grainRoughness : L.grainRoughness) / 100);
     gl.uniform1f(this.u.grainColor, (ownGrain ? p.grainColor : L.grainColor) / 100);
+    // Film response: the look's adds to the frame's, and its shape is the
+    // frame's own when the frame has some film response of its own.
+    const lookFilm = L ? L.filmResponse * amt : 0;
+    const F = p.filmResponse > 0 || !lookFilm ? p : L;
+    gl.uniform1f(this.u.filmAmount, tone ? Math.min(1, (p.filmResponse + lookFilm) / 100) : 0);
+    gl.uniform3f(this.u.filmShape, F.filmContrast / 100, F.filmLatitude / 100, F.filmCrossover / 100);
     gl.uniform1f(this.u.pxSize, crop.w * viewport.w * fw / outW / Math.max(fw, fh));
     gl.uniform1f(this.u.seed, 0.5);
     gl.uniform1i(this.u.linearSrc, this.linear ? 1 : 0);

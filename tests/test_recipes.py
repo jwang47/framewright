@@ -41,6 +41,24 @@ class RecipeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             recipe_schema.validate_recipe({"halation": 101})
 
+    def test_film_response_settings_need_film_response(self):
+        # Contrast, latitude and crossover shape the film response and mean
+        # nothing without it; at zero they are the model's own defaults.
+        self.assertEqual(studio.clean_edit({"filmContrast": 20, "filmLatitude": -30, "filmCrossover": 40}),
+                         {"version": 1})
+        self.assertEqual(studio.clean_edit({"filmResponse": 0, "filmContrast": 20}), {"version": 1})
+        self.assertEqual(studio.clean_edit({"filmResponse": 60, "filmContrast": 20, "filmLatitude": 0,
+                                            "filmCrossover": -150}),
+                         {"version": 1, "filmResponse": 60, "filmContrast": 20, "filmCrossover": -100})
+        look = studio.clean_look({"filmResponse": 50, "filmLatitude": 30, "exposure": 1})
+        self.assertEqual(look, {"filmResponse": 50, "filmLatitude": 30})
+        recipe_schema.validate_recipe({"filmResponse": 100, "filmCrossover": -100,
+                                       "look": {"name": "x", "params": look}})
+        self.assertTrue(any("filmResponse" in p["params"] for p in studio.film_presets()))
+        for bad in ({"filmResponse": -1}, {"filmContrast": 101}, {"filmLatitude": "soft"}):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                recipe_schema.validate_recipe(bad)
+
     def test_film_presets_are_valid_looks(self):
         presets = studio.film_presets()
         self.assertGreaterEqual(len(presets), 4)
