@@ -1817,7 +1817,15 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
         await new Promise(r => setTimeout(r, 700));
         st = await (await fetch('/api/card/format')).json();
         const pct = st.bytes_total ? Math.min(100, Math.round(st.bytes / st.bytes_total * 100)) : 0;
-        $('#importBar').value = pct / 100;
+        const frac = st.phase === 'erasing' ? 1 : pct / 100;
+        $('#importBar').value = frac;
+        // The same progress along the top, in the sidebar's card box and on the Dock.
+        bar.classList.add('on', 'determinate');
+        bar.style.setProperty('--pct', `${frac * 100}%`);
+        $('#cardBar').hidden = false;
+        $('#cardBar').style.setProperty('--pct', `${frac * 100}%`);
+        btn.textContent = st.phase === 'erasing' ? 'Formatting…' : `Verifying ${pct}%`;
+        native({ type: 'import', running: true, progress: frac });
         $('#importNow').textContent = st.phase === 'erasing' ? `formatting ${name}…`
           : `verifying the library's copies of ${name} · ${pct}%`;
         $('#importProgress').hidden = false;
@@ -1830,6 +1838,9 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       $('#importNow').textContent = `not formatted: ${e.message}`;
       app.status(`not formatted: ${e.message}`, 0);
     }
+    bar.classList.remove('on', 'determinate');
+    $('#cardBar').hidden = true;
+    native({ type: 'import', running: false, progress: 0 });
     await loadPlan().catch(() => {});
   });
 
