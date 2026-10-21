@@ -94,6 +94,11 @@
       "minimum": 0.0,
       "maximum": 100.0
     },
+    "mist": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 100.0
+    },
     "filmResponse": {
       "type": "number",
       "minimum": 0.0,
@@ -920,6 +925,11 @@
                   "maximum": 100.0
                 },
                 "bloom": {
+                  "type": "number",
+                  "minimum": 0.0,
+                  "maximum": 100.0
+                },
+                "mist": {
                   "type": "number",
                   "minimum": 0.0,
                   "maximum": 100.0

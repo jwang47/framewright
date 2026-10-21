@@ -59,6 +59,17 @@ class RecipeTests(unittest.TestCase):
             with self.subTest(bad), self.assertRaises(ValueError):
                 recipe_schema.validate_recipe(bad)
 
+    def test_mist_is_an_effect_looks_carry(self):
+        self.assertEqual(studio.clean_edit({"mist": 30}), {"version": 1, "mist": 30})
+        self.assertEqual(studio.clean_edit({"mist": 0}), {"version": 1})
+        self.assertEqual(studio.clean_edit({"mist": 150})["mist"], 100)
+        self.assertEqual(studio.clean_look({"mist": 25, "exposure": 1}), {"mist": 25})
+        recipe_schema.validate_recipe({"mist": 100, "look": {"name": "x", "params": {"mist": 40}}})
+        self.assertTrue(any("mist" in p["params"] for p in studio.film_presets()))
+        for bad in ({"mist": -1}, {"mist": 101}, {"mist": "soft"}):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                recipe_schema.validate_recipe(bad)
+
     def test_film_presets_are_valid_looks(self):
         presets = studio.film_presets()
         self.assertGreaterEqual(len(presets), 4)

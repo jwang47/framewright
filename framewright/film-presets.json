@@ -5,7 +5,7 @@
       "curve": {"rgb": [[0, 6], [25, 26], [75, 76], [100, 97]]},
       "splitHighlightHue": 40, "splitHighlightSat": 10, "splitShadowHue": 200, "splitShadowSat": 6,
       "grain": 22, "grainSize": 30, "grainRoughness": 35, "grainColor": 30,
-      "halation": 15, "halationSize": 30,
+      "halation": 15, "halationSize": 30, "mist": 8,
       "filmResponse": 70, "filmLatitude": 35, "filmCrossover": 12}},
     {"name": "Film · Tungsten 800", "params": {
       "temp": -12, "tint": 3, "contrast": 5,
@@ -31,7 +31,7 @@
       "curve": {"rgb": [[0, 12], [30, 30], [70, 70], [100, 92]]},
       "splitHighlightHue": 45, "splitHighlightSat": 12,
       "grain": 25, "grainSize": 28, "grainRoughness": 40, "grainColor": 35,
-      "halation": 10, "halationSize": 30,
+      "halation": 10, "halationSize": 30, "mist": 20,
       "filmResponse": 70, "filmContrast": -25, "filmLatitude": 50, "filmCrossover": 15}},
     {"name": "Film · Push 1600", "params": {
       "contrast": 15, "shadows": -10, "saturation": -10,
@@ -50,7 +50,7 @@
       "curve": {"rgb": [[0, 8], [25, 32], [75, 82], [100, 98]]},
       "splitHighlightHue": 50, "splitHighlightSat": 8,
       "grain": 20, "grainSize": 28, "grainRoughness": 30, "grainColor": 25,
-      "halation": 15, "halationSize": 35, "bloom": 8,
+      "halation": 15, "halationSize": 35, "bloom": 8, "mist": 25,
       "filmResponse": 100, "filmContrast": -20, "filmLatitude": 60, "filmCrossover": 10}}
   ]
 }
