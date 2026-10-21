@@ -1,9 +1,11 @@
 # Framewright
 
-A local photo editor built to work alongside an AI agent. Cull photographs,
-develop RAWs, and arrange post layouts in a browser. Edits and proposals are
-plain JSON beside the photos, so Claude Code, Codex, or another file-based agent
-can render an idea and show it live for you to accept or discard.
+An all-in-one media manager and photo/video editor for your Mac, built to work
+alongside an AI agent. Import cards from your cameras, cull and organise every
+photo and clip in one library, develop RAWs, cut video, and arrange posts,
+all locally. Edits and proposals are plain JSON beside the media, so Claude
+Code, Codex, or another file-based agent can render an idea and show it live
+for you to accept or discard.
 
 The application uses standard-library Python and plain browser modules. There
 is no JavaScript build step and no required Python runtime dependency.
@@ -11,6 +13,30 @@ is no JavaScript build step and no required Python runtime dependency.
 ![Framewright displaying a synthetic RAW and live proposal](docs/samples/framewright-demo.jpg)
 
 The demo uses a generated test image; no personal photographs or third-party LUTs are included.
+
+## What it does today
+
+- **Import** copies new photos and clips from one or more camera cards,
+  verifies every copy, sorts them into shoots, and can offload originals to an
+  external drive.
+- **Library** shows all your photos and clips by day, month and year. Pick,
+  mark for deletion, search, and gather frames into collections.
+- **Develop** edits photos and RAWs: exposure, colour, curves, masks, geometry,
+  lens profiles, looks and LUTs, with JPEG export.
+- **Cut** assembles clips into a video edit with trims, crossfades, slow
+  motion, titles and music, and exports an MP4 with ffmpeg.
+- **Post** arranges a collection's photos into slides.
+- **Send** exports a selection to a folder or a Tailscale device.
+- **Agent proposals** let an AI agent render a photo edit and suggest it for
+  you to accept, tweak or discard.
+
+## Direction
+
+Framewright is growing toward one place to keep, find and edit everything you
+shoot, so you don't need a separate catalogue, photo editor and video editor.
+Video editing in Cut is newer and simpler than Develop, agent proposals cover
+photo edits only, and the app runs on macOS only for now. Expect these areas
+to change.
 
 ## Run
 
@@ -45,11 +71,8 @@ You can also install a downloaded wheel with `pipx install PATH_TO_WHEEL`.
 The project has not been published to PyPI. The browser RAW decoder is bundled;
 no network access is needed to edit local photographs.
 
-The **Library** tab culls shoots and collections. **Develop** provides exposure,
-colour, curves, masks, geometry, looks and JPEG export. **Post** arranges selected
-photos into slides. The app reloads code changes and watches recipes/proposals
-for live updates; revision checks prevent stale saves from silently overwriting
-newer work.
+The app reloads code changes and watches recipes/proposals for live updates;
+revision checks prevent stale saves from silently overwriting newer work.
 
 ### Mac app
 
