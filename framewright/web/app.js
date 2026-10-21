@@ -1630,7 +1630,7 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
 // options. Optionally imports as soon as a card appears and ejects it after.
 (function cardImport() {
   const btn = $('#importBtn'), dlg = $('#importDlg'), go = $('#importGo'), bar = $('#busy');
-  let labels = {}, card = null, cards = [], groups = [], running = false, deleteInitialized = false, error = null, dest = null, many = false;
+  let labels = {}, emptyCards = [], card = null, cards = [], groups = [], running = false, deleteInitialized = false, error = null, dest = null, many = false;
   const auto = $('#importAuto'), autoEject = $('#importAutoEject');
   auto.checked = stored('studio.autoImport', '0') === '1';
   autoEject.checked = stored('studio.autoEject', '0') === '1';
@@ -1692,12 +1692,17 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
 
   async function check() {
     const res = await (await fetch('/api/card')).json().catch(() => ({}));
-    if (res.card === card) return;
+    // An empty card (just formatted) has nothing to import, but can be
+    // renamed or ejected.
+    const emptyKey = (res.empty || []).join(', ');
+    if (res.card === card && emptyKey === emptyCards.join(', ')) return;
+    emptyCards = res.empty || [];
     card = res.card || null;
     btn.hidden = !card;
-    $('#cardBox').hidden = !card;
-    $('#cardName').textContent = card || '';
-    if (!card) { if (dlg.open) dlg.close(); return; }
+    $('#cardBox').hidden = !card && !emptyCards.length;
+    $('#cardName').textContent = card || (emptyCards.length ? `${emptyCards.join(', ')} · empty` : '');
+    $('#cardEmpty').hidden = !!card || !emptyCards.length;
+    if (!card) { cards = emptyCards; if (dlg.open) dlg.close(); return; }
     await loadPlan();
     if (auto.checked && groups.length && !error) {
       app.status(`${card} connected: importing ${what(groups)}`, 4000);
@@ -1850,6 +1855,18 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
   });
 
   $('#cardCancel').addEventListener('click', () => $('#importCancel').click());
+  $('#cardEject').addEventListener('click', async e => {
+    e.currentTarget.blur();
+    try {
+      const res = await app.post('/api/eject', {});
+      app.status(`ejected ${res.ejected}; safe to pull the card`, 5000);
+      card = null;
+      emptyCards = [];
+      $('#cardBox').hidden = true;
+    } catch (err) {
+      app.status(`couldn't eject: ${err.message}`, 0);
+    }
+  });
   // Name the card itself, so it reads the same in Finder and on any computer.
   $('#cardRename').addEventListener('click', async e => {
     e.currentTarget.blur();
@@ -1861,6 +1878,7 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       await app.post('/api/card/rename', { card: current.trim(), name: name.trim() });
       app.status(`renamed ${current} to ${name.trim()}`, 4000);
       card = null;           // the next poll sees it under its new name
+      emptyCards = [];
     } catch (err) {
       app.status(`couldn't rename: ${err.message}`, 0);
     }

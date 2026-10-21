@@ -993,6 +993,36 @@ def plugged_cards() -> list[Path]:
         return []
 
 
+_volume_info: dict[str, dict | None] = {}
+
+
+def empty_cards() -> list[Path]:
+    """Freshly formatted cards: removable FAT/exFAT volumes holding nothing yet.
+
+    They have no DCIM or M4ROOT until a camera writes them, so find_cards
+    can't see them, but they can still be renamed or ejected. macOS only;
+    diskutil is asked once per mounted volume.
+    """
+    if sys.platform != "darwin":
+        return []
+    found = []
+    for vol in Path("/Volumes").iterdir():
+        try:
+            if not vol.is_dir() or any(not e.name.startswith(".") for e in vol.iterdir()):
+                continue
+        except OSError:
+            continue
+        key = str(vol)
+        if key not in _volume_info:
+            try:
+                _volume_info[key] = card_volume(vol)
+            except (ValueError, OSError, subprocess.SubprocessError):
+                _volume_info[key] = None
+        if _volume_info[key]:
+            found.append(vol)
+    return found
+
+
 def card_plan(root: Path, cards: list[Path], jpeg_only: bool, strict: bool = False) -> dict[Path, list[Path]]:
     """What importing the cards would copy; empty when nothing on them is new.
     strict re-hashes every file against its copy (slow; for erasing a card)."""
@@ -1936,10 +1966,11 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.loads(self.read_body())
                 if sys.platform != "darwin":
                     raise ValueError("rename the card in the camera or your file manager")
-                card = {c.name: c for c in plugged_cards()}.get(str(body.get("card", "")))
+                card = {c.name: c for c in [*plugged_cards(), *empty_cards()]}.get(str(body.get("card", "")))
                 if card is None:
                     self.send_json({"error": "that card is not plugged in"}, HTTPStatus.CONFLICT)
                     return
+                _volume_info.pop(str(card), None)
                 if _import.get("running") or _format.get("running"):
                     self.send_json({"error": "wait for the import or format to finish"}, HTTPStatus.CONFLICT)
                     return
@@ -1995,8 +2026,9 @@ class Handler(BaseHTTPRequestHandler):
         file's date off the card and is only asked for when the card appears.
         """
         cards = plugged_cards()
+        empty = empty_cards()
         if not cards:
-            self.send_json({"card": None, "cards": []})
+            self.send_json({"card": None, "cards": [], "empty": [v.name for v in empty]})
             return
         labels = {c.name: card_label(c) for c in cards}
         body: dict = {"card": ", ".join(c.name for c in cards), "cards": [c.name for c in cards],
@@ -2147,7 +2179,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(dict(_format))
 
     def api_eject(self) -> None:
-        cards = plugged_cards()
+        cards = plugged_cards() or empty_cards()
         if not cards:
             self.send_json({"error": "no camera card plugged in"}, HTTPStatus.CONFLICT)
             return

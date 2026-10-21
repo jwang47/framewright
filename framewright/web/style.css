@@ -788,3 +788,4 @@ main.grid > figure { content-visibility: auto; contain-intrinsic-size: auto 100p
 .music-form input[type=range] { flex: 1; accent-color: var(--pick); }
 .music-form input[type=number] { width: 80px; background: var(--panel2); color: var(--text); border: 1px solid var(--line2); border-radius: 6px; padding: 4px 6px; }
 .card-rename { margin-left: auto; padding: 1px 7px; font-size: 11px; font-weight: 400; background: transparent; color: var(--muted); }
+.card-empty { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
