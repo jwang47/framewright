@@ -822,7 +822,7 @@ export function createDevelop(app) {
     $('#lensInfo').textContent = st.dngLens ? 'corrected from the lens data in the DNG'
       : info?.inCamera ? `${info.profile.model}: already applied by the camera`
       : info?.profile ? `${info.model} @ ${info.focal}mm`
-      : info ? `no profile for ${info.model}` : 'no lens info';
+      : info ? `no profile for ${info.model} · use Distortion below` : 'no lens info';
   }
 
   $('#lensOn').addEventListener('change', e => {
@@ -1743,13 +1743,16 @@ export function createDevelop(app) {
   // The frames worth flipping between: the target collection in its order,
   // else the picks, else everything. The open frame always stays in the strip.
   function stripFrames() {
-    if (app.target && app.frames.some(f => f.selected)) {
-      const set = app.frames.filter(f => f.selected).sort((a, b) => a.selected - b.selected);
+    // In the whole Library, the strip is the open frame's day.
+    const shoot = app.frame(st.key)?.shoot;
+    const pool = app.view?.kind === 'library' && shoot ? app.frames.filter(f => f.shoot === shoot) : app.frames;
+    if (app.target && pool.some(f => f.selected)) {
+      const set = pool.filter(f => f.selected).sort((a, b) => a.selected - b.selected);
       const cur = app.frame(st.key);
       return cur && !cur.selected ? [...set, cur] : set;
     }
-    const picks = app.frames.filter(f => f.picked || f.id === st.key);
-    return picks.some(f => f.picked) ? picks : app.frames;
+    const picks = pool.filter(f => f.picked || f.id === st.key);
+    return picks.some(f => f.picked) ? picks : pool;
   }
 
   function paintStrip() {
@@ -1864,6 +1867,10 @@ export function createDevelop(app) {
     // Carried explicitly from here on, so a pre-raw edit, once touched, is
     // saved as a JPEG edit rather than flipping to the raw.
     st.params.source = source;
+    // A frame not edited yet starts with its lens profile on, when one is
+    // found and the camera hasn't already corrected it. It's saved with the
+    // first change; opening a frame alone writes nothing.
+    if (!edit.params && st.lens?.profile && !st.lens.inCamera && !st.dngLens) st.params.lens = st.lens.profile;
     st.legacy = !!edit.params && !edit.params.source && source === 'jpeg' && !!f.raw;
     syncSize();
     st.maskSel = -1;
@@ -2105,7 +2112,7 @@ export function createDevelop(app) {
     else if (k === 'w') setPicking(!st.picking);
     else if (st.proposal && ['1', '2', '3'].includes(k)) showCompare(['original', 'yours', 'proposed'][+k - 1]);
     else if (k === 'o') cycleGrid();
-    else if (k === 'x') toggleCrosshair();
+    else if (k === 'x' && e.shiftKey) toggleCrosshair();
     else if (k === 'c') toggleClip();
     else if (k === '=' || k === '+') { e.preventDefault(); setZoom(zoom.factor + 1); }
     else if (k === '-' || k === '_') { e.preventDefault(); setZoom(zoom.factor - 1); }
@@ -2118,7 +2125,7 @@ export function createDevelop(app) {
     else if (k === 'escape' && st.picking) setPicking(false);
     else if ((k === 'enter' || k === 'escape') && st.cropMode) setCropMode(false);
     else if (k === 'escape' && st.active) activate(null);
-    else if (k === ' ') { e.preventDefault(); if (st.key) app.togglePick(st.key); }
+    else if (k === 'p' || k === 'x') { e.preventDefault(); if (st.key) app.togglePick(st.key); }
   }
 
   return {

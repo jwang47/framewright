@@ -75,14 +75,8 @@ class ImportError_(Exception):
 
 
 def default_library() -> Path:
-    """Resolve the configured library, never the application checkout."""
-    library = resolve_library()
-    if library is None:
-        raise ImportError_(
-            "no library configured; pass --library <path>, set STUDIO_LIBRARY, "
-            "or choose a library in Framewright"
-        )
-    return library
+    """The configured library, otherwise ~/Pictures/Framewright; never the checkout."""
+    return resolve_library()
 
 
 def windows_removable(root: str) -> bool:
@@ -130,8 +124,8 @@ def clip_dir(root: Path) -> Path | None:
     return None
 
 
-def find_card() -> Path:
-    """Return the root of the one plugged-in card."""
+def find_cards() -> list[Path]:
+    """Every plugged-in card's root, so cards from several cameras import together."""
     found = [root for root in candidate_card_roots()
              if (root / "DCIM").is_dir() or clip_dir(root) is not None]
     if not found:
@@ -139,10 +133,41 @@ def find_card() -> Path:
             "no camera card found (looked for a DCIM folder on removable volumes).\n"
             "Plug the card in, or pass --source <path to DCIM or card root>."
         )
+    return sorted(found)
+
+
+def find_card() -> Path:
+    """Return the root of the one plugged-in card."""
+    found = find_cards()
     if len(found) > 1:
         listing = "\n".join(f"  {p}" for p in found)
         raise ImportError_(f"multiple cards found; pick one with --source:\n{listing}")
     return found[0]
+
+
+def card_label(root: Path) -> dict:
+    """What a card is, for showing it: the camera that wrote it (from the first
+    photo or clip sidecar that names one) and its kind. Sony keeps M4ROOT at
+    the root of a CFexpress Type A card and under PRIVATE/ on an SD card."""
+    model = None
+    for d in media_dirs(root):
+        for f in sorted(d.rglob("*"))[:400]:
+            ext = f.suffix.lower()
+            if ext in IMAGE_EXTS:
+                model = camera_model(f)
+            elif ext == ".xml" and CLIP_SIDECAR.match(f.name.split(".")[0]):
+                model = clip_model(f)
+            if model:
+                break
+        if model:
+            break
+    media = "CFexpress" if (root / "M4ROOT" / "CLIP").is_dir() else "SD" if clip_dir(root) or (root / "DCIM").is_dir() else "card"
+    short = None
+    if model:
+        words = model.split()
+        short = re.sub(r"^(ILCE|ILME|DSC|ZV)-", "", words[-1]) if len(words) > 1 else model
+    return {"camera": model, "short": short, "media": media,
+            "label": f"{short} · {media}" if short else f"{root.name} · {media}"}
 
 
 def resolve_source(source: str | None) -> Path:
@@ -210,22 +235,52 @@ def imported_frames(library: Path) -> set[str]:
                        for f in root.glob(sub) if f.is_file()}
 
 
+# Called with the size of each chunk hashed, so a long check can show progress.
+HASH_PROGRESS = None
+_hashes: dict[tuple, str] = {}
+
+
 def file_hash(path: Path) -> str:
+    st = path.stat()
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key in _hashes:
+        return _hashes[key]
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         while chunk := handle.read(CHUNK):
+            if HASH_PROGRESS:
+                HASH_PROGRESS(len(chunk))
             digest.update(chunk)
+    _hashes[key] = digest.hexdigest()
     return digest.hexdigest()
 
 
-def already_copied(shoot: Path, kind: str, src: Path) -> bool:
-    """Per-file identity keeps missing RAW/JPEG/sidecar siblings importable."""
+def already_copied(shoot: Path, kind: str, src: Path, strict: bool = False) -> bool:
+    """Per-file identity keeps missing RAW/JPEG/sidecar siblings importable.
+
+    Planning compares name, size and (for the store) the card's timestamp,
+    which takes seconds. Strict, for erasing a card, re-reads the copy itself:
+    a store copy must still hash to the fingerprint taken from the card at
+    import (and the card file still match its size and time); a library copy
+    is compared with the card byte for byte.
+    """
     local = shoot / kind / src.name
     if local.is_file():
-        return local.stat().st_size == src.stat().st_size and file_hash(local) == file_hash(src)
+        if local.stat().st_size != src.stat().st_size:
+            return False
+        return file_hash(local) == file_hash(src) if strict else True
     metadata = read_manifest(shoot).get(f"{kind}/{src.name}")
     if not metadata or metadata.get("size") != src.stat().st_size:
         return False
+    same_time = abs(metadata.get("mtime", -1) - src.stat().st_mtime) < 0.002
+    if not strict and same_time:
+        return True
+    root = store_root()
+    if strict and same_time and metadata.get("sha256") and root is not None and store_mounted(root):
+        copy = root / shoot.name / kind / src.name
+        return copy.is_file() and copy.stat().st_size == metadata["size"] and file_hash(copy) == metadata["sha256"]
+    if strict:
+        return False      # can't reach the copy to prove it: keep the card
     if metadata.get("sha256"):
         return metadata["sha256"] == file_hash(src)
     # Older manifests have no hash. Size and camera timestamp are stronger
@@ -233,7 +288,7 @@ def already_copied(shoot: Path, kind: str, src: Path) -> bool:
     return abs(metadata.get("mtime", -1) - src.stat().st_mtime) < 0.002
 
 
-def matching_shoot(library: Path, files: list[Path], day: date) -> Path | None:
+def matching_shoot(library: Path, files: list[Path], day: date, strict: bool = False) -> Path | None:
     if not library.is_dir():
         return None
     found = []
@@ -243,7 +298,7 @@ def matching_shoot(library: Path, files: list[Path], day: date) -> Path | None:
         # Normal patterns contain the date; custom patterns must too.
         if day.isoformat() not in shoot.name:
             continue
-        if any(already_copied(shoot, "video" if is_video(files) else "raw", f)
+        if any(already_copied(shoot, "video" if is_video(files) else "raw", f, strict)
                for f in files if f.suffix.lower() in MEDIA_EXTS):
             found.append(shoot)
     return found[0] if len(found) == 1 else None
@@ -326,8 +381,15 @@ def clip_model(path: Path) -> str | None:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    match = re.search(r'<Device[^>]*modelName="([^"]*)"', text)
-    return (match.group(1).strip() or None) if match else None
+    match = re.search(r'<Device\b[^>]*>', text)
+    if not match:
+        return None
+    attrs = dict(re.findall(r'(\w+)="([^"]*)"', match.group()))
+    make, model = attrs.get("manufacturer", "").strip(), attrs.get("modelName", "").strip()
+    # Name clips like camera_model() names stills, so a day of both lands in one shoot.
+    if make and model and not model.casefold().startswith(make.casefold()):
+        return f"{make} {model}"
+    return model or make or None
 
 
 def model_slug(model: str) -> str:
@@ -359,6 +421,7 @@ def plan(
     match: str | None = None,
     jpeg_only: bool = False,
     folder_pattern: str | None = None,
+    strict: bool = False,
 ) -> dict[Path, list[Path]]:
     """Map destination dir -> source files to copy there.
 
@@ -411,11 +474,11 @@ def plan(
         shoot = shoots_root(library) / folder
         # Continue an earlier/partial import into its original shoot even if
         # naming settings have changed. Match a sibling, not just a day.
-        existing = matching_shoot(library, frames[key], day)
+        existing = matching_shoot(library, frames[key], day, strict)
         if existing is not None:
             shoot = existing
         dest = shoot / kind
-        pending = [f for f in sorted(frames[key]) if force or not already_copied(shoot, kind, f)]
+        pending = [f for f in sorted(frames[key]) if force or not already_copied(shoot, kind, f, strict)]
         if pending:
             by_dest[dest] += pending
     return dict(by_dest)
@@ -424,8 +487,8 @@ def plan(
 # --- copying -----------------------------------------------------------------
 
 
-def copy_verified(src: Path, dest_dir: Path) -> None:
-    """Copy one file and confirm the bytes landed intact.
+def copy_verified(src: Path, dest_dir: Path) -> str:
+    """Copy one file, confirm the bytes landed intact, and return their SHA-256.
 
     Writes to a .part file first so an interrupted run cannot leave a
     truncated frame that later looks already-imported.
@@ -445,8 +508,9 @@ def copy_verified(src: Path, dest_dir: Path) -> None:
         if same:
             raise ImportError_(f"source and destination are the same file: {src}")
     if dest.exists():
-        if file_hash(dest) == file_hash(src):
-            return
+        digest = file_hash(src)
+        if file_hash(dest) == digest:
+            return digest
         raise ImportError_(f"destination already contains a different file: {dest}")
     dest_dir.mkdir(parents=True, exist_ok=True)
     # A stale partial may be a symlink/hardlink. Remove the directory entry
@@ -469,6 +533,7 @@ def copy_verified(src: Path, dest_dir: Path) -> None:
 
     shutil.copystat(src, tmp)
     tmp.replace(dest)
+    return src_hash.hexdigest()
 
 
 def place(src: Path, dest: Path, to_store: bool, delete_from_card: bool = False) -> None:
@@ -484,9 +549,11 @@ def place(src: Path, dest: Path, to_store: bool, delete_from_card: bool = False)
         return
     shoot_dir, kind = dest.parent, dest.name
     remote = require_store() / shoot_dir.name / kind
-    copy_verified(src, remote)
+    digest = copy_verified(src, remote)
     (shoot_dir / "raw").mkdir(parents=True, exist_ok=True)
-    record(shoot_dir, f"{kind}/{src.name}", src)
+    # The fingerprint from the copy itself: reading the card again for it
+    # halved import speed over slow links (a camera's USB, say).
+    record(shoot_dir, f"{kind}/{src.name}", src, digest)
     if delete_from_card:
         delete_verified_source(src, dest, True)
 
@@ -596,7 +663,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--library",
-        help="directory holding shoot folders (default: STUDIO_LIBRARY or saved config)",
+        help="directory holding shoot folders (default: STUDIO_LIBRARY, saved config, or ~/Pictures/Framewright)",
     )
     parser.add_argument(
         "--name",
@@ -649,11 +716,22 @@ def main(argv: list[str] | None = None) -> int:
         pattern, delete_from_card = import_settings()
         if args.delete_from_card is not None:
             delete_from_card = args.delete_from_card
-        library = resolve_library(args.library) if args.library else default_library()
+        library = resolve_library(args.library)
         if args.offload is not None:
             return offload(library, args.offload, args.dry_run)
-        card = resolve_source(args.source)
-        by_dest = plan(card, library, args.name, args.last, args.force, args.match, args.jpeg_only, args.shoot_folder_pattern or pattern)
+        # Without --source, every plugged-in card imports, one camera's day per folder.
+        cards = [resolve_source(args.source)] if args.source else find_cards()
+        by_dest: dict[Path, list[Path]] = defaultdict(list)
+        for card in cards:
+            try:
+                planned = plan(card, library, args.name, args.last, args.force, args.match, args.jpeg_only,
+                               args.shoot_folder_pattern or pattern)
+            except ImportError_ as exc:
+                if len(cards) == 1 or not str(exc).startswith("no media files"):
+                    raise
+                continue
+            for dest, files in planned.items():
+                by_dest[dest] += files
         root = store_root()
         to_store = not args.local and root is not None and store_mounted(root)
         image_location = str(root) if to_store else "in the library"
@@ -663,7 +741,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"card:    {card}")
+    print("card:    " + ", ".join(str(c) for c in cards))
     print(f"library: {library}")
     print(f"images:  {image_location}")
 

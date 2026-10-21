@@ -57,7 +57,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .import_photos import ImportError_, default_library, frame_key  # noqa: E402
+from .import_photos import ImportError_, frame_key  # noqa: E402
 from .settings import resolve_library  # noqa: E402
 from .server import (  # noqa: E402
     EDIT_RANGES,
@@ -346,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
             recipe_file(args.check)
             print(f"{args.check}: valid recipe")
             return 0
-        root = resolve_library(args.library) or default_library()
+        root = resolve_library(args.library)
         if args.propose:
             print(write_proposal(root, args.frames[0], args.propose, args.note, args.replace_proposal))
             return 0

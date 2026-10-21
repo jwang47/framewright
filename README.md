@@ -1,9 +1,11 @@
 # Framewright
 
-A local photo editor built to work alongside an AI agent. Cull photographs,
-develop RAWs, and arrange post layouts in a browser. Edits and proposals are
-plain JSON beside the photos, so Claude Code, Codex, or another file-based agent
-can render an idea and show it live for you to accept or discard.
+An all-in-one media manager and photo/video editor for your Mac, built to work
+alongside an AI agent. Import cards from your cameras, cull and organise every
+photo and clip in one library, develop RAWs, cut video, and arrange posts,
+all locally. Edits and proposals are plain JSON beside the media, so Claude
+Code, Codex, or another file-based agent can render an idea and show it live
+for you to accept or discard.
 
 The application uses standard-library Python and plain browser modules. There
 is no JavaScript build step and no required Python runtime dependency.
@@ -12,17 +14,49 @@ is no JavaScript build step and no required Python runtime dependency.
 
 The demo uses a generated test image; no personal photographs or third-party LUTs are included.
 
+## What it does today
+
+- **Import** copies new photos and clips from one or more camera cards,
+  verifies every copy, sorts them into shoots, and can offload originals to an
+  external drive.
+- **Library** shows all your photos and clips by day, month and year. Pick,
+  mark for deletion, search, and gather frames into collections.
+- **Develop** edits photos and RAWs: exposure, colour, curves, masks, geometry,
+  lens profiles, looks and LUTs, with JPEG export.
+- **Cut** assembles clips into a video edit with trims, crossfades, slow
+  motion, titles and music, and exports an MP4 with ffmpeg.
+- **Post** arranges a collection's photos into slides.
+- **Send** exports a selection to a folder or a Tailscale device.
+- **Agent proposals** let an AI agent render a photo edit and suggest it for
+  you to accept, tweak or discard.
+
+## Direction
+
+Framewright is growing toward one place to keep, find and edit everything you
+shoot, so you don't need a separate catalogue, photo editor and video editor.
+Video editing in Cut is newer and simpler than Develop, agent proposals cover
+photo edits only, and the app runs on macOS only for now. Expect these areas
+to change.
+
 ## Run
 
-Requires **Python 3.10+** and a current browser with WebGL2. From a checkout:
+Framewright runs on **macOS** for now; other platforms are not supported or
+tested. It requires **Python 3.10+** and a current browser with WebGL2. From a
+checkout:
 
 ```sh
 python -m framewright
 ```
 
-The app opens at http://localhost:8765. On first run, enter an absolute library
-folder path. A new empty folder works. A library contains shoot folders directly:
-if migrating from the personal tool, select its existing `shoots/` folder.
+`./dev` does the same and installs Python with Homebrew first if it
+is missing. `./dev app` opens this checkout in the Mac app window instead,
+installing the Xcode command line tools and building the app when needed.
+Other arguments pass through, as in `./dev --library /path/to/library`.
+
+The app opens at http://localhost:8765. Without a configured library it uses
+`~/Pictures/Framewright`, created on first run. A library contains shoot folders
+directly: if migrating from the personal tool, pass its existing `shoots/` folder
+with `--library` or set `"library"` in the config.
 
 ```sh
 python -m framewright --library /path/to/library
@@ -40,17 +74,36 @@ You can also install a downloaded wheel with `pipx install PATH_TO_WHEEL`.
 The project has not been published to PyPI. The browser RAW decoder is bundled;
 no network access is needed to edit local photographs.
 
-The **Library** tab culls shoots and collections. **Develop** provides exposure,
-colour, curves, masks, geometry, looks and JPEG export. **Post** arranges selected
-photos into slides. The app reloads code changes and watches recipes/proposals
-for live updates; revision checks prevent stale saves from silently overwriting
-newer work.
+The app reloads code changes and watches recipes/proposals for live updates;
+revision checks prevent stale saves from silently overwriting newer work.
+
+### Mac app
+
+`macos/build.sh` builds `dist/Framewright.app` (`--install` copies it to
+/Applications). It needs the Xcode command line tools and runs the bundled
+package with your Python 3.10+, in its own window on a private port. It adds
+File ▸ Import from Card (⌘I), ⌘1–4 for the tabs, Dock progress and a
+notification when an import finishes, keeps the Mac awake while importing,
+and asks before quitting mid-import. Closing the window keeps it running.
+
+For working on Framewright itself, `macos/build.sh --dev --install` builds an
+app that runs this checkout live instead of a bundled copy: saving Python
+code restarts the server and saving page code reloads the window, as with
+`python -m framewright`. Rebuild only after changing `macos/` itself.
 
 ## Settings and storage
 
-Library selection is `--library`, then `$STUDIO_LIBRARY`, then saved config.
-There is no Git-checkout fallback. The importer and renderer use the same order;
-without a configured library they print a setup error.
+Library selection is `--library`, then `$STUDIO_LIBRARY`, then saved config,
+then `~/Pictures/Framewright` in your home folder. Edits, picks, proposals and
+previews are saved there, never in the Git checkout. The importer and renderer
+use the same order.
+
+To bring an older library (for example a `shoots/` folder kept inside the
+checkout) into the current one, run `framewright migrate /path/to/old/library
+--dry-run`, then again without `--dry-run`. It copies edits, picks, proposals,
+looks, cuts and images, never overwriting a file already there; add
+`--metadata-only` to leave images and clips behind, such as when they live on
+the store.
 
 The server keeps an in-memory photo index for day counts, search and source
 lookups. The first request scans the library; subsequent requests reuse each
@@ -60,8 +113,7 @@ affected days on the next lookup. Files modified in place are rechecked within
 is rebuilt after a server restart and does not write into the photo library.
 
 Config lives at `$XDG_CONFIG_HOME/framewright/config.json` (default
-`~/.config/framewright/config.json`) on macOS/Linux, or
-`%APPDATA%/framewright/config.json` on Windows. `$STUDIO_CONFIG` overrides the
+`~/.config/framewright/config.json`). `$STUDIO_CONFIG` overrides the
 config file location. The `STUDIO_*` environment names remain supported for
 compatibility. Example:
 
@@ -85,8 +137,7 @@ a mounted drive. `$STUDIO_STORE` overrides it; `$PHOTO_STORE` remains accepted.
 Offload appears when the store is available. It copies and verifies each file,
 records it in the shoot manifest, then removes the library copy. Aliases of the
 source and conflicting destination contents are refused. Unmounted removable
-paths under `/Volumes`, `/media` and `/run/media` cannot silently redirect
-writes onto the internal disk. Windows drive roots must be available too.
+paths under `/Volumes` cannot silently redirect writes onto the internal disk.
 
 With a store disconnected, manifests keep frames listed and cached previews
 available. Editing the original RAW or exporting full resolution requires the
@@ -110,8 +161,32 @@ posts/<collection>/NN.jpg           exported post slides
 ## Import and send
 
 Connect a card with DCIM, or a Sony M4ROOT/CLIP layout, to use **Import**.
-Windows detection checks removable drive types. CLI import can also read any
-explicit source folder:
+One click copies everything new, straight to the store when it is plugged in;
+the button shows progress, speed and time left. Cards from several cameras
+can be connected at once and import together, each camera's day into its own
+shoot. The dialog (right-click the button, or click it while importing)
+offers importing automatically when a card connects and ejecting afterwards.
+
+The **Library** shows every photo and clip, newest day first, under month and
+day headings; **Years** and **Months** zoom out to cover cards, and each day has
+Select and Add to collection. **Collections** shows every collection as a card,
+dated by the date you set on it or else the latest day it covers. The header
+switches workspaces: Library, Develop (photos) and Cut (video; Enter on a clip).
+After an import, **Check before formatting** re-reads every library copy of
+the card's photos and clips and says whether it's safe to format the card in
+the camera (Framewright never erases a card; the camera sets up its own
+database when it formats). **Rename** names the card itself. **Cut** assembles clips into an edit saved as `<library>/cuts/<name>.cut.json`: mark a clip's in and out with I and O, press E to add it, drag to reorder or trim, B splits at the playhead, ⌫ removes, ⌘Z undoes, and **Export…** renders an MP4 to `export/cuts/` with ffmpeg (S-Log3 converted to Rec.709 when on). Preview plays gaplessly by priming the next clip in a second player. C adds a crossfade into the selected clip (again for a dip to black, ⇧C for longer), M plays a 120p clip as 24p slow motion (the Speed menu has more presets and a custom percent), drag the ruler to scrub, T adds a title at the playhead (drag to move, double-click to edit), and ♪ Music adds a song from the library's music folder with its level, fades and the clips' own level. Its clip bin lists a day's clips with a player (Space plays, P picks, `,`/`.` step frames), and
+Open/Reveal hand a clip to QuickTime or Finder. With ffmpeg installed, clips
+get poster frames and 540p preview copies (made in the background); the player shows the original and switches to the copy only while you scrub; S-Log clips show through an approximate display conversion
+(viewing only, toggle with **Log preview**). An SSD or Mac tag on each item
+says whether its file is on the store or in the library.
+
+P (or X) picks a photo or video and ⌫ (or Z) marks it for deletion; marked
+items dim, and the **Marked for deletion** filter has **Move to Trash…** for
+when space runs low (files go to the Trash, so Finder can put them back). S
+adds the selected photo or clip to the target collection and **Add picks**
+(⇧S) adds every pick in view. A post's slides use the collection's photos.
+CLI import can also read any explicit source folder:
 
 ```sh
 framewright import --source /path/to/card --library /path/to/library --dry-run
@@ -130,8 +205,7 @@ skipping an entire frame. Different bytes at the same destination are refused.
 **Delete from card after verified copy** is off by default. If enabled, cleanup
 waits until the complete selected batch succeeds, then rechecks each destination
 before removing its copied source. Skipped and unrecognized files stay on the
-card. `--no-delete-from-card` overrides a saved deletion preference. Eject is
-available on macOS; use the operating system's eject control elsewhere.
+card. `--no-delete-from-card` overrides a saved deletion preference.
 
 **Send** exports the selected scope, then either reveals it in the local file
 manager or sends it to a Tailscale device. Taildrop targets appear only when
@@ -160,9 +234,7 @@ an sRGB LUT at the profile's own amount; any other settings it carries
 
 Search order is `$STUDIO_LUTS` (platform-separated folder list), config `luts`,
 the user LUT folder, then `<library>/luts`. The user folder is
-`~/Library/Application Support/framewright/luts` on macOS,
-`$XDG_CONFIG_HOME/framewright/luts` (default `~/.config/framewright/luts`) on
-Linux, and `%APPDATA%/framewright/luts` on Windows.
+`~/Library/Application Support/framewright/luts`.
 
 New LUT looks carry `lutHash`, the first 16 hex digits of SHA256. Resolution
 prefers that fingerprint across all search folders, then the filename. Missing
@@ -259,8 +331,8 @@ python tools/check_release.py --all
 python -m framewright schema --out framewright/recipe.schema.json
 ```
 
-Node 22 is only used for tests. CI runs Python 3.10 and 3.12 on macOS, Linux
-and Windows, builds/inspects distribution files, and checks a wheel installation
+Node 22 is only used for tests. CI runs Python 3.10 and 3.12 on macOS, runs the
+full RAW smoke test, builds/inspects distribution files, and checks a wheel installation
 outside the checkout. An opt-in full RAW smoke test generates a synthetic DNG:
 set `STUDIO_RAW_SMOKE=1` when running the tests with a supported browser installed.
 No test fixtures require personal photographs or licensed LUTs.

@@ -2,8 +2,9 @@
 
 The application and the user's library are separate. Code belongs in this
 repository; photos, recipes, picks, exports, LUTs and proposals belong under the
-library selected by `--library`, `STUDIO_LIBRARY`, or the user's config. Do not
-assume a drive, camera model, shoot name, or default personal library exists.
+library selected by `--library`, `STUDIO_LIBRARY`, or the user's config, which
+otherwise defaults to `~/Pictures/Framewright` and never the checkout. Do not
+assume a drive, camera model, shoot name, or personal library exists.
 
 ## Editing a photograph
 
@@ -78,7 +79,7 @@ Keep the application stdlib Python and plain browser JavaScript with no build
 step. Run `python -m unittest discover -s tests -v`,
 `node --test tests/luts.test.mjs tests/segment.test.mjs`, and
 `python tools/check_release.py` for relevant changes. CI runs on Python 3.10/3.12
-and Node 22 across macOS, Linux and Windows. Regenerate and test schema changes.
+and Node 22 on macOS, the only supported platform for now. Regenerate and test schema changes.
 Use fake cards and temporary libraries for import/offload tests. Never test
 removal or offloading against someone's real card or library without a request.
 
@@ -97,3 +98,25 @@ retain camera rendering and available embedded orientation, may be larger, and
 may be unavailable for a RAW without an embedded JPEG; browser RAW development
 still uses LibRaw. Do not substitute a fallback silently when evaluating a RAW
 edit's fidelity.
+
+## Keyboard shortcuts
+
+Every common action needs a key reachable one-handed in both postures: right
+hand alone (thumb on the trackpad, fingers on the right half of the keyboard)
+and left hand on the keyboard with the right on the trackpad. Today that is
+P or X to pick, Space or Enter to play video, arrows/HJKL to move, `,`/`.` to
+step frames, ⌫ or Z to mark for deletion, S to add to a collection (⇧S adds
+all picks), F/O to filter, and G/D/⇧P/T for tabs. Deleting only ever moves
+files to the Trash, from the Marked for deletion filter.
+Keep a key's meaning the same across tabs (pick is never something else
+somewhere), and update the shortcut lists in `web/index.html` with any change.
+
+## What's new
+
+Every user-visible change adds an entry at the top of
+`framewright/web/changes.json`: the next `id` and a `text` of a few words
+(e.g. "Draggable dividers"), no sentences. After an update the app shows a
+toast naming the entries that window hasn't seen yet.
+
+AGENTS.md and CLAUDE.md must stay in sync: when you change guidance in one,
+make the same change in the other.

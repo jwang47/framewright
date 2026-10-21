@@ -454,6 +454,8 @@ export function createPost(app) {
   // Take up the collection's photos and post from the server, keeping the
   // selected slide where it can.
   function applyCollection(c) {
+    // Clips can be in a collection, but a post's slides are photos.
+    c.items = c.items.filter(ref => !(c.clipItems || []).includes(ref));
     st.items = c.items;
     st.rev = c.rev;
     st.post = c.post || {
@@ -916,7 +918,7 @@ export function createPost(app) {
       const k = e.key.toLowerCase();
       if (k === 'escape') return selectCell(-1);
       if (k === 'o') return cyclePref('studio.grid', ['off', 'thirds', 'fine']);
-      if (k === 'x') return cyclePref('studio.crosshair', ['0', '1']);
+      if (k === 'x' && e.shiftKey) return cyclePref('studio.crosshair', ['0', '1']);
       if (k === 'arrowdown' || k === 'arrowright' || k === 'j' || k === 'l') { e.preventDefault(); select(st.sel + 1); }
       else if (k === 'arrowup' || k === 'arrowleft' || k === 'k' || k === 'h') { e.preventDefault(); select(st.sel - 1); }
     },

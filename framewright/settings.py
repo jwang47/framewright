@@ -65,12 +65,17 @@ def validate_port(value: int) -> int:
     return value
 
 
-def resolve_library(explicit: str | Path | None = None) -> Path | None:
+def default_library_path() -> Path:
+    """The library when nothing chooses one: in the user's home, never the checkout."""
+    return (Path.home() / "Pictures" / "Framewright").resolve()
+
+
+def resolve_library(explicit: str | Path | None = None) -> Path:
     value = explicit or os.environ.get("STUDIO_LIBRARY")
     if value:
         return _path(str(value))
     value = load_config().get("library")
-    return _path(value, config_path().parent) if value else None
+    return _path(value, config_path().parent) if value else default_library_path()
 
 
 def configured_store() -> Path | None:
