@@ -55,6 +55,11 @@ File ▸ Import from Card (⌘I), ⌘1–4 for the tabs, Dock progress and a
 notification when an import finishes, keeps the Mac awake while importing,
 and asks before quitting mid-import. Closing the window keeps it running.
 
+For working on Framewright itself, `macos/build.sh --dev --install` builds an
+app that runs this checkout live instead of a bundled copy: saving Python
+code restarts the server and saving page code reloads the window, as with
+`python -m framewright`. Rebuild only after changing `macos/` itself.
+
 ## Settings and storage
 
 Library selection is `--library`, then `$STUDIO_LIBRARY`, then saved config.

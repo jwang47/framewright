@@ -123,11 +123,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                                       detail: "Install it with: brew install python"), baseURL: nil)
             return
         }
-        let code = Bundle.main.resourceURL!.appendingPathComponent("app")
+        // A dev build (build.sh --dev) runs the checkout it was built from, with
+        // the server's hot reload: code changes restart it, page changes reload.
+        let live = (Bundle.main.object(forInfoDictionaryKey: "FramewrightSource") as? String).map { URL(fileURLWithPath: $0) }
+        let dev = live.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent("framewright/__main__.py").path) } ?? false
+        let code = dev ? live! : Bundle.main.resourceURL!.appendingPathComponent("app")
         port = freePort()
         let p = Process()
         p.executableURL = URL(fileURLWithPath: python)
-        p.arguments = ["-m", "framewright", "--no-browser", "--no-reload", "--port", String(port)]
+        p.arguments = ["-m", "framewright", "--no-browser", "--port", String(port)] + (dev ? [] : ["--no-reload"])
+        if dev { window.title = "Framewright (dev)" }
         p.currentDirectoryURL = code
         var env = ProcessInfo.processInfo.environment
         env["PYTHONPATH"] = code.path

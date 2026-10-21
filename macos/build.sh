@@ -3,11 +3,20 @@
 #
 #   macos/build.sh                # -> dist/Framewright.app
 #   macos/build.sh --install      # also copy it to /Applications
+#   macos/build.sh --dev --install  # run this checkout live, with hot reload
 #
 # Needs the Xcode command line tools (swiftc). The app bundles this
 # checkout's framewright package and runs it with the user's Python 3.10+.
 set -eu
 cd "$(dirname "$0")/.."
+dev=0 install=0
+for arg in "$@"; do
+  case "$arg" in
+    --dev) dev=1 ;;
+    --install) install=1 ;;
+    *) echo "usage: macos/build.sh [--dev] [--install]" >&2; exit 2 ;;
+  esac
+done
 out=dist/Framewright.app
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)
 tmp=$(mktemp -d)
@@ -41,14 +50,15 @@ cat > "$out/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.photography</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+$( [ "$dev" = 1 ] && printf '  <key>FramewrightSource</key><string>%s</string>\n' "$PWD" )
   <key>NSRemovableVolumesUsageDescription</key><string>Framewright imports photos and videos from camera cards.</string>
 </dict></plist>
 PLIST
 
 codesign --force --deep --sign - "$out" >/dev/null 2>&1 || echo "warning: ad-hoc signing failed" >&2
-echo "built $out"
+echo "built $out$( [ "$dev" = 1 ] && echo " (dev: runs $PWD live)" )"
 
-if [ "${1:-}" = "--install" ]; then
+if [ "$install" = 1 ]; then
   rm -rf /Applications/Framewright.app
   cp -R "$out" /Applications/
   echo "installed /Applications/Framewright.app"
