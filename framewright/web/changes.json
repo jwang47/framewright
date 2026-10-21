@@ -1,4 +1,5 @@
 [
+  {"id": 27, "text": "Migrate an old library"},
   {"id": 26, "text": "Library defaults to your home folder"},
   {"id": 25, "text": "Offload only when needed"},
   {"id": 24, "text": "Reload time in the corner"},

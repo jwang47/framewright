@@ -68,6 +68,13 @@ then `~/Pictures/Framewright` in your home folder. Edits, picks, proposals and
 previews are saved there, never in the Git checkout. The importer and renderer
 use the same order.
 
+To bring an older library (for example a `shoots/` folder kept inside the
+checkout) into the current one, run `framewright migrate /path/to/old/library
+--dry-run`, then again without `--dry-run`. It copies edits, picks, proposals,
+looks, cuts and images, never overwriting a file already there; add
+`--metadata-only` to leave images and clips behind, such as when they live on
+the store.
+
 The server keeps an in-memory photo index for day counts, search and source
 lookups. The first request scans the library; subsequent requests reuse each
 day's file list. Directory, offload-manifest and storage-setting changes refresh
