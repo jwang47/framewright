@@ -1,6 +1,7 @@
 """Video clips in the library, with synthetic files only."""
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -148,6 +149,20 @@ class ClipTests(unittest.TestCase):
         status, _, body = request("GET", "/api/collection?slug=reel")
         self.assertEqual(json.loads(body)["items"], [])
 
+        # A collection's own date wins over the derived one, and clears back.
+        self.assertEqual(request("POST", "/api/collections/date", {"collection": "reel", "date": "2026-01-02"})[0], 200)
+        status, _, body = request("GET", "/api/shoots")
+        reel = next(c for c in json.loads(body)["collections"] if c["slug"] == "reel")
+        self.assertEqual((reel["date"], reel["dateSet"], reel["kind"]), ("2026-01-02", True, "set"))
+        self.assertEqual(request("POST", "/api/collections/date", {"collection": "reel", "date": "Jan 2"})[0], 400)
+        self.assertEqual(request("POST", "/api/collections/date", {"collection": "reel", "date": ""})[0], 200)
+        status, _, body = request("GET", "/api/frames?all=1")
+        self.assertEqual(json.loads(body)["frames"], [])    # this library has only a clip
+
+        # Formatting wants the typed name and a plugged-in card.
+        self.assertEqual(request("POST", "/api/card/format", {"card": "NOPE", "confirm": "NOPE"})[0],
+                         409 if sys.platform == "darwin" else 400)
+
     def test_collections_newest_first(self):
         from framewright import server
         trips = [{"name": "Old trip", "days": {"from": "2025-01-01", "to": "2025-01-05"}, "items": []},
@@ -156,6 +171,25 @@ class ClipTests(unittest.TestCase):
                  {"name": "New trip", "days": {"from": "2026-09-01", "to": "2026-09-20"}, "items": []}]
         dates = sorted(((server.collection_date(c), c["name"]) for c in trips), reverse=True)
         self.assertEqual([n for _, n in dates], ["New trip", "Portfolio", "Old trip", "Empty"])
+
+    def test_format_refuses_until_everything_is_imported(self):
+        from framewright import server
+        card = self.base / "CARD"
+        (card / "DCIM" / "100MSDCF").mkdir(parents=True)
+        (card / "DCIM" / "100MSDCF" / "DSC00001.JPG").write_bytes(b"photo")
+        volume = {"FilesystemType": "exfat", "DeviceIdentifier": "disk99s1"}
+        calls = []
+        fake_run = lambda cmd, **kw: calls.append(cmd) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        with patch.object(server, "card_volume", return_value=volume), patch.object(server.subprocess, "run", fake_run):
+            server._format.update(running=True, error=None, done=False)
+            server.run_format(self.shoot.parent, card)
+            self.assertIn("not in the library yet", server._format["error"])
+            self.assertEqual(calls, [])
+            with patch.object(server, "card_plan", return_value={}):
+                server._format.update(running=True, error=None, done=False)
+                server.run_format(self.shoot.parent, card)
+        self.assertTrue(server._format["done"])
+        self.assertEqual(calls, [["diskutil", "eraseVolume", "ExFAT", "CARD", "disk99s1"]])
 
 if __name__ == "__main__":
     unittest.main()

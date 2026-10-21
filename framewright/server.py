@@ -81,7 +81,7 @@ from datetime import datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .luts import HASH_PATTERN, LUT_SUFFIXES, MAX_LUT_BYTES, install_lut, lut_hash, valid_name
 from .photo_index import PhotoIndex
@@ -565,7 +565,10 @@ def find_collection(collections: list[dict], slug: str) -> dict | None:
 
 
 def collection_date(c: dict) -> str:
-    """The latest day a collection covers: its range's end, else its newest item's day."""
+    """A collection's date: the one set on it, else the latest day it covers
+    (its range's end, else its newest item's day)."""
+    if c.get("date"):
+        return c["date"]
     if c.get("days"):
         return c["days"]["to"]
     return max((shoot_date(ref.partition("/")[0]) for ref in c.get("items", [])), default="")
@@ -637,6 +640,16 @@ def clean_name(name: object) -> str:
     if not isinstance(name, str) or not slugify(name):
         raise ValueError("a collection needs a name with a letter or digit in it")
     return name.strip()[:80]
+
+
+def clean_date(value: object) -> str | None:
+    """A collection's own date, YYYY-MM-DD, or None to go back to the derived one."""
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise ValueError("date must be YYYY-MM-DD")
+    datetime.strptime(value, "%Y-%m-%d")
+    return value
 
 
 def clean_days(body: dict) -> dict | None:
@@ -1085,6 +1098,59 @@ def run_offload(root: Path, shoots: list[str]) -> None:
         state["current"] = None
 
 
+# --- formatting a card -----------------------------------------------------------
+#
+# After an import, a card can be erased for reuse. The job first re-plans the
+# import, which hashes every photo and clip on the card against its verified
+# copy; anything not safely in the library stops it. Only then does diskutil
+# erase the card's own volume, keeping its file system and name. macOS only.
+
+_format: dict = {"running": False}
+
+
+def card_volume(card: Path) -> dict:
+    """diskutil's facts about the card's volume, refusing anything but an
+    external, removable volume mounted exactly at the card."""
+    import plistlib
+    result = subprocess.run(["diskutil", "info", "-plist", str(card)], capture_output=True, timeout=30)
+    if result.returncode:
+        raise ValueError(f"couldn't read {card.name}: {result.stderr.decode(errors='replace').strip()}")
+    info = plistlib.loads(result.stdout)
+    if info.get("Internal") is not False or not (info.get("RemovableMedia") or info.get("Ejectable")):
+        raise ValueError(f"{card.name} is not a removable card; refusing to format it")
+    if Path(info.get("MountPoint", "")) != card:
+        raise ValueError(f"{card.name} is not mounted where expected; refusing to format it")
+    store = configured_store()
+    if store is not None and (store == card or card in store.parents):
+        raise ValueError(f"{card.name} holds the photo store; refusing to format it")
+    if info.get("FilesystemType") not in ("exfat", "msdos"):
+        raise ValueError(f"{card.name} uses {info.get('FilesystemType')}; format it in the camera instead")
+    return info
+
+
+def run_format(root: Path, card: Path) -> None:
+    state = _format
+    try:
+        state["phase"] = "checking"
+        info = card_volume(card)
+        pending = card_plan(root, [card], False)
+        if pending:
+            n = sum(len(v) for v in pending.values())
+            raise ValueError(f"{n} files on {card.name} are not in the library yet; import them first")
+        state["phase"] = "erasing"
+        personality = "ExFAT" if info["FilesystemType"] == "exfat" else "MS-DOS FAT32"
+        name = card.name if info["FilesystemType"] == "exfat" else card.name.upper()[:11]
+        result = subprocess.run(["diskutil", "eraseVolume", personality, name, info["DeviceIdentifier"]],
+                                capture_output=True, text=True, timeout=300)
+        if result.returncode:
+            raise ValueError((result.stderr or result.stdout).strip() or "diskutil failed")
+        state["done"] = True
+    except (ImportError_, OSError, ValueError, subprocess.SubprocessError) as exc:
+        state["error"] = str(exc)
+    finally:
+        state["running"] = False
+
+
 def eject(card: Path) -> str | None:
     """Unmount the card so it can be pulled; an error message, or None."""
     if sys.platform != "darwin":
@@ -1249,10 +1315,12 @@ class Handler(BaseHTTPRequestHandler):
                 "clipCounts": {shoot: n for shoot in shoots if (n := len(clips.clip_files(self.root / shoot)))},
                 "store": drive_name() if configured_store() else None,
                 "storeMounted": store_mounted(),
+                "storeFree": shutil.disk_usage(configured_store()).free if store_mounted() else None,
                 "collections": sorted((
                     {"name": c["name"], "slug": slugify(c["name"]), "days": c.get("days"),
-                     "date": collection_date(c),
-                     "shoots": collection_shoots(self.root, c), "items": len(c.get("items", []))}
+                     "date": collection_date(c), "dateSet": bool(c.get("date")),
+                     "shoots": collection_shoots(self.root, c), "items": len(c.get("items", [])),
+                     **self.collection_summary(c)}
                     for c in collections
                 ), key=lambda c: (c["date"], c["name"].lower()), reverse=True),
             })
@@ -1261,6 +1329,10 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "frames"]:
             if "collection" in query:
                 self.api_collection_frames(query["collection"][0])
+            elif "all" in query:
+                # The whole library, newest day first; thumbnails render as the grid asks.
+                frames = [f for shoot in list_shoots(self.root) for f in self.shoot_frames(shoot, warm=False)]
+                self.send_json({"name": "Library", "frames": frames})
             else:
                 self.api_frames(query.get("shoot", [""])[0])
             return
@@ -1288,6 +1360,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if parts == ["api", "import"]:
             self.send_json(dict(_import))
+            return
+
+        if parts == ["api", "card", "format"]:
+            self.send_json(dict(_format))
             return
 
         if parts == ["api", "offload"]:
@@ -1391,6 +1467,38 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self.send_error(HTTPStatus.NOT_FOUND)
+
+    def collection_summary(self, c: dict) -> dict:
+        """What a Collections card shows: kind, photo and clip counts, and up
+        to three cover images (its first items, else picks from its days)."""
+        clip_keys: dict[str, set[str]] = {}
+
+        def is_clip(shoot: str, key: str) -> bool:
+            if shoot not in clip_keys:
+                d = self.shoot_dir(shoot)
+                clip_keys[shoot] = set(clips.clip_files(d)) if d else set()
+            return key in clip_keys[shoot]
+
+        def url(shoot: str, key: str) -> str:
+            kind = "clipposter" if is_clip(shoot, key) else "thumb"
+            return f"/{kind}/{quote(shoot)}/{quote(key)}.jpg"
+
+        refs = [r.partition("/")[::2] for r in c.get("items", [])]
+        refs = [(s, k) for s, k in refs if self.shoot_dir(s)]
+        n_clips = sum(1 for s, k in refs if is_clip(s, k))
+        n_photos = len(refs) - n_clips
+        cover = [url(s, k) for s, k in refs[:3]]
+        days = collection_shoots(self.root, c)
+        for shoot in days:
+            d = self.root / shoot
+            in_items = {k for s, k in refs if s == shoot}
+            n_photos += len(set(frame_sources(d)) - in_items)
+            n_clips += len(set(clips.clip_files(d)) - in_items)
+            if len(cover) < 3:
+                keys = sorted(read_picks(d) & set(frame_sources(d))) or sorted(frame_sources(d))
+                cover += [url(shoot, k) for k in keys[:3 - len(cover)]]
+        kind = "trip" if c.get("days") else "post" if c.get("post") else "set"
+        return {"kind": kind, "photos": n_photos, "clips": n_clips, "cover": cover}
 
     # Videos
 
@@ -1532,10 +1640,10 @@ class Handler(BaseHTTPRequestHandler):
         clips.reveal(found[1], open_it=action == "open")
         self.send_json({"ok": True})
 
-    def shoot_frames(self, shoot: str) -> list[dict]:
+    def shoot_frames(self, shoot: str, warm: bool = True) -> list[dict]:
         """Every frame of one shoot, in capture order."""
         d = self.root / shoot
-        if shoot not in self.warmed:
+        if warm and shoot not in self.warmed:
             self.warmed.add(shoot)
             threading.Thread(target=warm_previews, args=(self.root, shoot), daemon=True).start()
         picks, rejects = read_picks(d), read_picks(d, REJECTS_FILE)
@@ -1731,6 +1839,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.api_import(json.loads(self.read_body() or b"{}"))
             elif url.path == "/api/eject":
                 self.api_eject()
+            elif url.path == "/api/card/format":
+                self.api_format(json.loads(self.read_body() or b"{}"))
             elif url.path == "/api/offload":
                 self.api_offload(json.loads(self.read_body() or b"{}"))
             elif url.path == "/api/proposal":
@@ -1851,6 +1961,28 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=run_offload, args=(self.root, shoots), daemon=True).start()
         self.send_json(_offload)
 
+    def api_format(self, body: dict) -> None:
+        """Erase one card, named in the request, once all of it is imported."""
+        if sys.platform != "darwin":
+            self.send_json({"error": "format the card in the camera"}, HTTPStatus.BAD_REQUEST)
+            return
+        cards = {c.name: c for c in plugged_cards()}
+        card = cards.get(str(body.get("card", "")))
+        if card is None:
+            self.send_json({"error": "that card is not plugged in"}, HTTPStatus.CONFLICT)
+            return
+        if body.get("confirm") != card.name:
+            self.send_json({"error": "type the card's name to confirm"}, HTTPStatus.BAD_REQUEST)
+            return
+        with _import_lock:
+            if _import.get("running") or _offload.get("running") or _format.get("running"):
+                self.send_json({"error": "wait for the import or offload to finish"}, HTTPStatus.CONFLICT)
+                return
+            _format.clear()
+            _format.update(running=True, card=card.name, phase="checking", error=None, done=False)
+        threading.Thread(target=run_format, args=(self.root, card), daemon=True).start()
+        self.send_json(dict(_format))
+
     def api_eject(self) -> None:
         cards = plugged_cards()
         if not cards:
@@ -1914,7 +2046,22 @@ class Handler(BaseHTTPRequestHandler):
                 c = {"name": name, "items": []}
                 if days := clean_days(body):
                     c["days"] = days
+                if date := clean_date(body.get("date")):
+                    c["date"] = date
                 collections.append(c)
+            elif action == "date":
+                c = find_collection(collections, body.get("collection", ""))
+                if c is None:
+                    self.send_json({"error": "no such collection"}, HTTPStatus.NOT_FOUND)
+                    return
+                date = clean_date(body.get("date"))
+                if date:
+                    c["date"] = date
+                else:
+                    c.pop("date", None)
+                write_collections(self.root, collections)
+                self.send_json({"ok": True, "slug": slugify(c["name"]), "date": collection_date(c)})
+                return
             elif action in ("rename", "delete"):
                 c = find_collection(collections, body.get("collection", ""))
                 if c is None:

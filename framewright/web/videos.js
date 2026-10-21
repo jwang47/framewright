@@ -56,7 +56,9 @@ export function createVideos(app) {
   const find = x => clips.find(c => id(c) === x);
   const filter = () => $('#vidFilter').value;
   const shown = () => filter() === 'picks' ? clips.filter(c => c.picked) : clips;
-  const day = () => app.view?.kind === 'shoot' ? app.view.id : null;
+  // Cut opened from a clip shows that clip's day; otherwise the day being viewed.
+  let dayOverride = null;
+  const day = () => dayOverride || (app.view?.kind === 'shoot' ? app.view.id : null);
 
   async function load() {
     const mine = ++token;
@@ -381,7 +383,12 @@ export function createVideos(app) {
   }
 
   return {
-    show() { attach(home); loaded = null; load(); },
+    show(clip) {
+      attach(home);
+      loaded = null;
+      if (clip) { dayOverride = clip.shoot; scope = 'day'; focus = `${clip.shoot}/${clip.key}`; }
+      load();
+    },
     // Library: play one clip in the preview pane.
     lend(host, c) { attach(host); if (loaded !== id(c)) open(c); },
     toggle,

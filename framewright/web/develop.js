@@ -1739,13 +1739,16 @@ export function createDevelop(app) {
   // The frames worth flipping between: the target collection in its order,
   // else the picks, else everything. The open frame always stays in the strip.
   function stripFrames() {
-    if (app.target && app.frames.some(f => f.selected)) {
-      const set = app.frames.filter(f => f.selected).sort((a, b) => a.selected - b.selected);
+    // In the whole Library, the strip is the open frame's day.
+    const shoot = app.frame(st.key)?.shoot;
+    const pool = app.view?.kind === 'library' && shoot ? app.frames.filter(f => f.shoot === shoot) : app.frames;
+    if (app.target && pool.some(f => f.selected)) {
+      const set = pool.filter(f => f.selected).sort((a, b) => a.selected - b.selected);
       const cur = app.frame(st.key);
       return cur && !cur.selected ? [...set, cur] : set;
     }
-    const picks = app.frames.filter(f => f.picked || f.id === st.key);
-    return picks.some(f => f.picked) ? picks : app.frames;
+    const picks = pool.filter(f => f.picked || f.id === st.key);
+    return picks.some(f => f.picked) ? picks : pool;
   }
 
   function paintStrip() {

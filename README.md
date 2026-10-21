@@ -130,9 +130,13 @@ can be connected at once and import together, each camera's day into its own
 shoot. The dialog (right-click the button, or click it while importing)
 offers importing automatically when a card connects and ejecting afterwards.
 
-The **Library** shows a day's photos and clips together in shooting order;
-filter to photos or videos only. **Videos** (T) lists clips for a day or the
-whole library with a player (Space plays, P picks, `,`/`.` step frames), and
+The **Library** shows every photo and clip, newest day first, under month and
+day headings; **Years** and **Months** zoom out to cover cards, and each day has
+Select and Add to collection. **Collections** shows every collection as a card,
+dated by the date you set on it or else the latest day it covers. The header
+switches workspaces: Library, Develop (photos) and Cut (video; Enter on a clip).
+After an import, **Format card…** erases the card for reuse, but only after
+re-checking every file on it against the library. **Cut** lists clips for a day with a player (Space plays, P picks, `,`/`.` step frames), and
 Open/Reveal hand a clip to QuickTime or Finder. With ffmpeg installed, clips
 get poster frames; S-Log clips show through an approximate display conversion
 (viewing only, toggle with **Log preview**). An SSD or Mac tag on each item

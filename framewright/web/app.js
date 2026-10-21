@@ -30,7 +30,21 @@ function dayLabel(shoot) {
   if (!shootDate(shoot)) return shoot;
   const [y, m, d] = shootDate(shoot).split('-').map(Number);
   const date = new Date(y, m - 1, d);
-  return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  const year = y === new Date().getFullYear() ? undefined : 'numeric';
+  return date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short', year });
+}
+
+function monthLabel(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+
+function plural(n, word) { return `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`; }
+
+// "4 photos · 38 clips" for a run of items.
+function mediaCount(items) {
+  const clips = items.filter(x => x.video).length, photos = items.length - clips;
+  return [photos && plural(photos, 'photo'), clips && plural(clips, 'clip')].filter(Boolean).join(' · ') || 'empty';
 }
 
 // The Mac app (macos/) listens for these to show notifications, badge the
@@ -142,11 +156,15 @@ export const app = {
     $('#develop').hidden = tab !== 'develop';
     $('#post').hidden = tab !== 'post';
     $('#videos').hidden = tab !== 'videos';
+    $('#collections').hidden = tab !== 'collections';
     if (tab !== 'videos') videos.hide();
+    paintNav();
     if (tab === 'post') {
       post.show();
+    } else if (tab === 'collections') {
+      renderCollections();
     } else if (tab === 'videos') {
-      videos.show();
+      videos.show(this.clip(this.focusKey));
     } else if (tab === 'library') {
       library.render();
       // After layout, so the selected thumbnail is scrolled into view.
@@ -253,15 +271,17 @@ export const app = {
   },
 
   // Every picked photo and clip shown here that isn't in the target collection yet.
-  async addPicks() {
-    if (!this.target) return this.status('make a collection first: New collection', 3000);
-    const refs = library.merged().filter(x => x.picked && !x.selected).map(x => x.video ? x.id.slice(5) : x.id);
-    if (!refs.length) return this.status(`every pick here is already in ${this.targetName()}`, 2500);
+  addPicks() { return this.addItems(library.merged().filter(x => x.picked), 'pick'); },
+
+  async addItems(items, what = 'item') {
+    if (!this.target) return this.status('choose a collection first (Collection menu in the toolbar)', 3000);
+    const refs = items.filter(x => !x.selected).map(x => x.video ? x.id.slice(5) : x.id);
+    if (!refs.length) return this.status(`all of these are already in ${this.targetName()}`, 2500);
     try {
       const res = await this.post('/api/select', { collection: this.target, refs });
       this.applySelects(res.selects);
       updateCollectionCount(this.target, res.selects.length);
-      this.status(`added ${refs.length} pick${refs.length > 1 ? 's' : ''} to ${this.targetName()}`, 3000);
+      this.status(`added ${plural(refs.length, what)} to ${this.targetName()}`, 3000);
     } catch (e) {
       this.status(`save failed: ${e.message}`, 0);
     }
@@ -353,11 +373,69 @@ const library = {
   },
 
   // Photos and clips in shooting order: by day, then time of day.
+  // The whole Library runs newest day first, each day in shooting order.
   merged() {
-    if (!app.clips.length) return app.frames;
-    const at = x => `${shootDate(x.shoot)} ${x.shoot} ${x.time}`;
-    return [...app.frames, ...app.clips].map((x, i) => [at(x), i, x])
-      .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] - b[1]).map(e => e[2]);
+    const lib = app.view?.kind === 'library';
+    if (!app.clips.length && !lib) return app.frames;
+    const cmp = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+    return [...app.frames, ...app.clips].map((x, i) => [shootDate(x.shoot), x.shoot, x.time, i, x])
+      .sort((a, b) => (lib ? cmp(b[0], a[0]) : cmp(a[0], b[0])) || cmp(a[1], b[1]) || cmp(a[2], b[2]) || a[3] - b[3])
+      .map(e => e[4]);
+  },
+
+  zoomLevel: stored('studio.zoomLevel', 'days'),
+
+  setZoomLevel(level, anchor) {
+    this.zoomLevel = level;
+    store('studio.zoomLevel', level);
+    for (const b of document.querySelectorAll('#zoomLevel button')) b.setAttribute('aria-pressed', b.dataset.zoom === level);
+    this.render();
+    if (anchor) requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ block: 'start' }));
+    else if (level === 'days' || level === 'all') requestAnimationFrame(() => this.setFocus(app.focusKey));
+  },
+
+  coverOf(items) {
+    const best = [...items.filter(x => x.picked), ...items.filter(x => !x.picked && !x.video), ...items.filter(x => x.video)];
+    return best.slice(0, 3).map(x => x.video ? `/clipposter/${encodeURIComponent(x.shoot)}/${x.key}.jpg` : app.src('thumb', x));
+  },
+
+  // Months and Years: one card per month (or year), its best three as a cover.
+  renderCards(items) {
+    const list = $('#list');
+    const years = this.zoomLevel === 'years';
+    const groups = new Map();
+    for (const x of items) {
+      const date = shootDate(x.shoot) || '0000-00-00';
+      const k = years ? date.slice(0, 4) : date.slice(0, 7);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(x);
+    }
+    let year = null, grid = null;
+    for (const [k, group] of groups) {
+      if (!years && k.slice(0, 4) !== year) {
+        year = k.slice(0, 4);
+        const all = items.filter(x => shootDate(x.shoot).startsWith(year));
+        const h = document.createElement('h2');
+        h.className = 'month';
+        h.id = `y-${year}`;
+        h.innerHTML = `${year} <span>${mediaCount(all)}</span>`;
+        list.appendChild(h);
+        grid = null;
+      }
+      if (!grid) { grid = document.createElement('div'); grid.className = 'cards'; list.appendChild(grid); }
+      const days = new Set(group.map(x => shootDate(x.shoot))).size;
+      const cover = this.coverOf(group);
+      const name = years ? k : monthLabel(k).replace(/\s\d{4}$/, '');
+      const clips = group.filter(x => x.video).length;
+      const a = document.createElement('button');
+      a.className = 'mcard';
+      a.innerHTML = `<span class="mosaic n${cover.length}">${cover.map(u => `<img loading="lazy" alt="" src="${u}">`).join('')}
+          ${clips ? `<span class="chip">▶ ${clips}</span>` : ''}</span>
+        <span class="mcard-meta"><strong>${name}</strong><span>${plural(days, 'day')} · ${mediaCount(group)}</span></span>`;
+      a.addEventListener('click', () => years ? this.setZoomLevel('months', `y-${k}`) : this.setZoomLevel('days', `m-${k}`));
+      grid.appendChild(a);
+    }
+    if (!items.length) list.innerHTML = '<p class="empty">Nothing here yet.</p>';
   },
 
   clipFigure(c) {
@@ -378,7 +456,7 @@ const library = {
       </div>
       <figcaption><span class="name">${c.key}</span><span>${c.time}</span></figcaption>`;
     fig.querySelector('.frame').addEventListener('click', e => this.click(c.id, e));
-    fig.querySelector('.frame').addEventListener('dblclick', () => { this.setFocus(c.id, false); videos.toggle(); });
+    fig.querySelector('.frame').addEventListener('dblclick', () => { this.setFocus(c.id, false); app.setTab('videos'); });
     fig.querySelector('.star').addEventListener('click', e => { e.stopPropagation(); this.setFocus(c.id, false); app.togglePick(c.id); });
     return fig;
   },
@@ -386,16 +464,60 @@ const library = {
   render() {
     const list = $('#list');
     list.innerHTML = '';
+    this.observer?.disconnect();
+    // Edited thumbnails render through the shader only once they scroll into view.
+    this.observer = new IntersectionObserver(entries => {
+      for (const e of entries) if (e.isIntersecting) {
+        this.observer.unobserve(e.target);
+        const f = app.frame(e.target.dataset.id);
+        if (f?.params) thumbs.apply(f);
+      }
+    }, { rootMargin: '400px' });
     const frames = this.shown();
-    const byDay = app.isCollection() && !!app.view.days && this.filter() !== 'post';
-    let day = null;
+    const lib = app.view?.kind === 'library';
+    $('#zoomLevel').hidden = !lib;
+    const cards = lib && (this.zoomLevel === 'months' || this.zoomLevel === 'years') && this.filter() !== 'post';
+    list.classList.toggle('timeline', cards);
+    $('#library .lib').classList.toggle('cards-mode', cards);   // cards get the full width
+    if (cards) { this.renderCards(frames); app.updateCounts(); return; }
+    const timeline = lib && this.zoomLevel !== 'all';
+    const byDay = timeline || (app.isCollection() && !!app.view.days && this.filter() !== 'post');
+    const dayOf = x => timeline ? shootDate(x.shoot) : x.shoot;
+    const perDay = new Map(), perMonth = new Map();
+    for (const x of frames) {
+      const d = dayOf(x), m = shootDate(x.shoot).slice(0, 7);
+      if (!perDay.has(d)) perDay.set(d, []);
+      perDay.get(d).push(x);
+      if (!perMonth.has(m)) perMonth.set(m, []);
+      perMonth.get(m).push(x);
+    }
+    let day = null, month = null;
     for (const f of frames) {
-      if (byDay && f.shoot !== day) {
-        day = f.shoot;
-        const n = frames.filter(x => x.shoot === day).length;
+      if (timeline && shootDate(f.shoot).slice(0, 7) !== month) {
+        month = shootDate(f.shoot).slice(0, 7);
+        const items = perMonth.get(month);
         const h = document.createElement('h2');
+        h.className = 'month';
+        h.id = `m-${month}`;
+        h.innerHTML = `${monthLabel(month)} <span>${plural(new Set(items.map(x => shootDate(x.shoot))).size, 'day')} · ${mediaCount(items)}</span>`;
+        list.appendChild(h);
+      }
+      if (byDay && dayOf(f) !== day) {
+        day = dayOf(f);
+        const items = perDay.get(day);
+        const cameras = [...new Set(items.map(x => x.camera || x.shoot.replace(/^\d{4}-\d{2}-\d{2}_?/, '').replace(/-/g, ' ')))].filter(Boolean);
+        const h = document.createElement('div');
         h.className = 'day';
-        h.innerHTML = `${dayLabel(day)} <span>${day} · ${n}</span>`;
+        h.id = `d-${day}`;
+        h.innerHTML = `<h3>${dayLabel(f.shoot)}</h3><span class="meta">${mediaCount(items)}${cameras.length ? ' · ' + cameras.join(', ') : ''}</span>
+          <span class="day-actions"><button data-act="select">Select</button><button data-act="add">Add to collection</button></span>`;
+        h.querySelector('[data-act=select]').addEventListener('click', e => {
+          e.currentTarget.blur();
+          const ids = items.filter(x => !x.video).map(x => x.id);
+          this.choose(ids);
+          if (ids.length) this.setFocus(ids[0], false);
+        });
+        h.querySelector('[data-act=add]').addEventListener('click', e => { e.currentTarget.blur(); app.addItems(items); });
         list.appendChild(h);
       }
       if (f.video) {
@@ -430,7 +552,7 @@ const library = {
       });
       list.appendChild(fig);
       this.paint(f.id);
-      if (f.params) thumbs.apply(f);
+      if (f.params) this.observer.observe(fig);
     }
     if (!frames.length) {
       const clips = app.view?.kind === 'shoot' && app.clipCounts[app.view.id];
@@ -1021,6 +1143,7 @@ function setFilter(value) {
   const sel = $('#filter');
   sel.value = [...sel.options].some(o => o.value === value && !o.hidden) ? value : 'all';
   library.render();
+  paintNav();
   const vis = library.visible();
   library.setFocus(vis.includes(app.focusKey) ? app.focusKey : vis[0] || null);
 }
@@ -1198,7 +1321,8 @@ addEventListener('keydown', e => {
   }
   if (app.tab === 'library' && app.isClip(app.focusKey)) {
     // Space plays a video; P (or X) picks it, like everything else.
-    if (k === ' ' || k === 'enter' || k === 'd') { e.preventDefault(); return videos.toggle(); }
+    if (k === ' ') { e.preventDefault(); return videos.toggle(); }
+    if (k === 'enter' || k === 'd') { e.preventDefault(); return app.setTab('videos'); }
     if (k === ',' || k === '.') { e.preventDefault(); return videos.step(k === '.' ? 1 : -1); }
   }
   if (k === 'd' || (k === 'enter' && app.tab === 'library')) {
@@ -1284,15 +1408,18 @@ function setTarget(slug) {
   post.textContent = app.target ? `In ${app.targetName()}, in order (O)` : '';
   if (!app.target && $('#filter').value === 'post') $('#filter').value = 'all';
   $('#renameCol').disabled = $('#deleteCol').disabled = $('#addPicks').disabled = !app.target;
+  document.querySelector('.tabs [data-tab=post]').hidden = !app.target;
 }
 
 async function loadView(value, tab, frame) {
   let [kind, id] = value.split(/:(.*)/s);
   if (kind === 'trip') kind = 'collection';          // links from before collections
-  const q = kind === 'collection' ? `collection=${encodeURIComponent(id)}` : `shoot=${encodeURIComponent(id)}`;
+  const q = kind === 'collection' ? `collection=${encodeURIComponent(id)}`
+    : kind === 'library' ? 'all=1' : `shoot=${encodeURIComponent(id)}`;
   const [data, clipData] = await Promise.all([
     fetch('/api/frames?' + q).then(r => r.json()),
-    kind === 'shoot' ? fetch('/api/clips?' + q).then(r => r.ok ? r.json() : { days: [] }) : null,
+    kind === 'shoot' ? fetch('/api/clips?' + q).then(r => r.ok ? r.json() : { days: [] })
+      : kind === 'library' ? fetch('/api/clips').then(r => r.ok ? r.json() : { days: [] }) : null,
   ]);
   app.view = { kind, id, name: data.name || id, days: data.days || null };
   app.frames = data.frames.map(f => ({ ...f, id: `${f.shoot}/${f.key}`, selected: 0 }));
@@ -1301,6 +1428,9 @@ async function loadView(value, tab, frame) {
   app.chosen = new Set();
   app.focusKey = app.frame(frame) || app.clip(frame) ? frame : (library.merged()[0] || {}).id || null;
   if (kind === 'collection') setTarget(id);
+  $('#viewTitle').textContent = kind === 'library' ? 'Library' : kind === 'collection' ? app.view.name : dayLabel(id);
+  $('#viewBack').hidden = kind === 'library';
+  $('#shoot').value = value;
   // A collection with days is where day picks get narrowed down: start on them.
   const start = kind === 'collection' && app.view.days && app.frames.some(f => f.picked) ? 'picks' : 'all';
   $('#filter').value = start;
@@ -1313,7 +1443,7 @@ async function loadView(value, tab, frame) {
 
 // Rebuild the view menu and the target menu from the server.
 async function refreshMenus(keepView) {
-  const { shoots, shootCounts = {}, clipCounts = {}, store, storeMounted, collections } = await (await fetch('/api/shoots')).json();
+  const { shoots, shootCounts = {}, clipCounts = {}, store, storeMounted, storeFree, collections } = await (await fetch('/api/shoots')).json();
   app.collections = collections;
   app.clipCounts = clipCounts;
   app.storeName = store || 'external drive';
@@ -1331,8 +1461,24 @@ async function refreshMenus(keepView) {
     const count = parts.length ? ` (${parts.join(' · ')})` : '';
     return `<option value="shoot:${s}">${s}${count}</option>`;
   }).join('');
-  sel.innerHTML = (collections.length ? `<optgroup label="Collections">${colOpts}</optgroup>` : '') +
+  sel.innerHTML = '<option value="library:all">Library</option>' +
+    (collections.length ? `<optgroup label="Collections">${colOpts}</optgroup>` : '') +
     `<optgroup label="Days">${shootOpts}</optgroup>`;
+  const total = Object.values(shootCounts).reduce((a, b) => a + b, 0) + Object.values(clipCounts).reduce((a, b) => a + b, 0);
+  $('#navLibraryN').textContent = total.toLocaleString();
+  $('#navCollectionsN').textContent = collections.length || '';
+  $('#recentCols').innerHTML = collections.slice(0, 5).map(c => `
+    <button class="side-col" data-slug="${c.slug}">
+      <span class="swatch">${c.cover[0] ? `<img alt="" src="${c.cover[0]}">` : ''}</span>
+      <span class="nm">${c.name}</span><span class="n">${shortDate(c.date)}</span>
+    </button>`).join('');
+  for (const b of document.querySelectorAll('#recentCols .side-col')) {
+    b.addEventListener('click', () => { b.blur(); loadView(`collection:${b.dataset.slug}`, 'library'); });
+  }
+  $('#driveRow').hidden = !store;
+  $('#driveName').textContent = store || '';
+  $('#driveFree').textContent = !storeMounted ? 'not plugged in' : storeFree != null ? `${bytes(storeFree)} free` : '';
+  if (app.tab === 'collections') renderCollections();
   if (keepView && [...sel.options].some(o => o.value === keepView)) sel.value = keepView;
   $('#target').innerHTML = '<option value="">No collection</option>' +
     collections.map(c => `<option value="${c.slug}">${c.name}</option>`).join('');
@@ -1386,8 +1532,7 @@ async function deleteCollection() {
     const shoots = await refreshMenus(`${app.view.kind}:${app.view.id}`);
     setTarget(null);
     if (viewing) {
-      $('#shoot').value = `shoot:${shoots[0]}`;
-      await loadView($('#shoot').value, app.tab);
+      await loadView('library:all', 'library');
     } else {
       await loadTarget();
     }
@@ -1437,9 +1582,13 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     if (!r) return;
     input.blur();
     box.hidden = true;
-    const view = `shoot:${r.shoot}`;
-    $('#shoot').value = view;
-    await loadView(view, app.tab === 'develop' ? 'develop' : 'library', `${r.shoot}/${r.key}`);
+    const id = `${r.shoot}/${r.key}`;
+    if (app.view?.kind === 'library' && app.frame(id)) {
+      if (app.tab !== 'develop') { app.setTab('library'); library.setFocus(id); }
+      else { app.focusKey = id; app.setTab('develop'); }
+    } else {
+      await loadView('library:all', app.tab === 'develop' ? 'develop' : 'library', id);
+    }
     app.status(`${r.key} · ${r.shoot}`);
   }
 
@@ -1514,6 +1663,7 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     many = (res.cards || []).length > 1;
     $('#importCard').textContent = card;
     $('#importEject').hidden = !res.eject;
+    $('#importFormat').hidden = !res.eject || !!res.error || (res.groups || []).length > 0 || (res.cards || []).length !== 1;
     const total = groups.reduce((t, g) => t + g.mb, 0);
     $('#importPlan').innerHTML = res.error ? `<p class="none">${res.error}</p>`
       : !groups.length ? '<p class="none">Everything on this card is already in the library.</p>'
@@ -1537,6 +1687,8 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     if (res.card === card) return;
     card = res.card || null;
     btn.hidden = !card;
+    $('#cardBox').hidden = !card;
+    $('#cardName').textContent = card || '';
     if (!card) { if (dlg.open) dlg.close(); return; }
     await loadPlan();
     if (auto.checked && groups.length && !error) {
@@ -1565,6 +1717,8 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       const p = `${(pct * 100).toFixed(1)}%`;
       btn.style.setProperty('--pct', p);
       bar.style.setProperty('--pct', p);
+      $('#cardBar').hidden = false;
+      $('#cardBar').style.setProperty('--pct', p);
       btn.textContent = `Importing ${Math.round(pct * 100)}%${eta(left) ? ' · ' + eta(left) : ''}`;
       document.title = `${Math.round(pct * 100)}% · Framewright`;
       native({ type: 'import', running: true, progress: pct });
@@ -1589,11 +1743,9 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       notify('Import finished', `${what(st.groups)} from ${st.card}, verified.`);
       // Open the newest day that got anything; a day of only clips opens in Videos.
       const shoots = await refreshMenus(`${app.view?.kind}:${app.view?.id}`);
-      const newest = [...st.groups].sort((a, b) => shootDate(a.shoot).localeCompare(shootDate(b.shoot)) || a.shoot.localeCompare(b.shoot)).pop();
-      if (newest && shoots.includes(newest.shoot)) {
-        const stills = st.groups.some(g => g.shoot === newest.shoot && g.kind !== 'video');
-        $('#shoot').value = `shoot:${newest.shoot}`;
-        await loadView(`shoot:${newest.shoot}`, stills ? 'library' : 'videos');
+      if (shoots.length) {
+        await loadView('library:all', 'library');
+        library.setZoomLevel('days');
       }
       if (autoEject.checked) $('#importEject').click();
     } catch (e) {
@@ -1604,6 +1756,7 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       running = false;
       document.title = 'Framewright';
       bar.classList.remove('on', 'determinate');
+      $('#cardBar').hidden = true;
       native({ type: 'import', running: false, progress: 0 });
       $('#importJpeg').disabled = $('#importDelete').disabled = false;
       await loadPlan().catch(() => {});
@@ -1627,12 +1780,38 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       const res = await app.post('/api/eject', {});
       dlg.close();
       card = null;
-      btn.hidden = true;
+      btn.hidden = $('#cardBox').hidden = true;
       app.status(`ejected ${res.ejected}; safe to pull the card`, 5000);
     } catch (e) {
       app.status(`couldn't eject: ${e.message}`, 0);
     }
   });
+  // Format: offered once everything on the card is in the library. The server
+  // re-checks every file by hash before erasing, and wants the name typed.
+  $('#importFormat').addEventListener('click', async () => {
+    const name = (card || '').split(', ')[0];
+    const typed = prompt(`Erase everything on "${name}"? Framewright first checks that every photo and clip on it is safely in the library, then formats it (keeping its name). Files Framewright doesn't import are erased too.\n\nType the card's name to confirm:`);
+    if (typed === null) return;
+    try {
+      await app.post('/api/card/format', { card: name, confirm: typed.trim() });
+      let st;
+      do {
+        await new Promise(r => setTimeout(r, 700));
+        st = await (await fetch('/api/card/format')).json();
+        $('#importNow').textContent = st.phase === 'erasing' ? `formatting ${name}…` : `checking every file on ${name} against the library…`;
+        $('#importProgress').hidden = false;
+      } while (st.running);
+      if (st.error) throw new Error(st.error);
+      $('#importNow').textContent = `${name} formatted; it's empty and ready for the camera`;
+      app.status(`formatted ${name}`, 5000);
+      notify('Card formatted', `${name} is empty and ready for the camera.`);
+    } catch (e) {
+      $('#importNow').textContent = `not formatted: ${e.message}`;
+      app.status(`not formatted: ${e.message}`, 0);
+    }
+    await loadPlan().catch(() => {});
+  });
+
   // The Mac app's File ▸ Import menu item (⌘I) lands here.
   window.framewrightImport = () => (card && groups.length && !running ? run() : btn.hidden ? app.status('no camera card connected', 3000) : btn.click());
   poll();
@@ -1755,15 +1934,118 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
   document.addEventListener('visibilitychange', poll);
 })();
 
+function shortDate(date) {
+  if (!date) return '';
+  const [y, m, d] = date.split('-').map(Number);
+  const opts = { month: 'short', day: 'numeric', year: y === new Date().getFullYear() ? undefined : 'numeric' };
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, opts);
+}
+
+function bytes(n) {
+  return n >= 2 ** 40 ? `${(n / 2 ** 40).toFixed(1)} TB` : n >= 2 ** 30 ? `${Math.round(n / 2 ** 30)} GB` : `${Math.round(n / 2 ** 20)} MB`;
+}
+
+// --- sidebar ---------------------------------------------------------------------
+
+function paintNav() {
+  const lib = app.view?.kind === 'library';
+  const on = (id, yes) => $(id).classList.toggle('on', !!yes);
+  on('#navCollections', app.tab === 'collections' || (app.view?.kind === 'collection' && app.tab !== 'collections'));
+  on('#navPicks', app.tab !== 'collections' && lib && library.filter() === 'picks');
+  on('#navLibrary', app.tab !== 'collections' && lib && library.filter() !== 'picks');
+  for (const b of document.querySelectorAll('#recentCols .side-col')) {
+    b.classList.toggle('on', app.tab !== 'collections' && app.view?.kind === 'collection' && app.view.id === b.dataset.slug);
+  }
+}
+
+async function openLibrary(filter = 'all') {
+  if (app.view?.kind !== 'library') await loadView('library:all', 'library');
+  else app.setTab('library');
+  setFilter(filter);
+  paintNav();
+}
+
+$('#navLibrary').addEventListener('click', e => { e.currentTarget.blur(); openLibrary('all'); });
+$('#navPicks').addEventListener('click', e => { e.currentTarget.blur(); openLibrary('picks'); });
+$('#navCollections').addEventListener('click', e => { e.currentTarget.blur(); app.setTab('collections'); });
+$('#viewBack').addEventListener('click', e => { e.currentTarget.blur(); openLibrary('all'); });
+for (const b of document.querySelectorAll('#zoomLevel button')) {
+  b.setAttribute('aria-pressed', b.dataset.zoom === library.zoomLevel);
+  b.addEventListener('click', () => { b.blur(); library.setZoomLevel(b.dataset.zoom); });
+}
+
+// --- collections workspace -----------------------------------------------------------
+//
+// Every collection as a card with a cover from its items (or its days' picks),
+// grouped by month of its date. Clicking one opens it in the Library.
+
+let colKind = '';
+for (const b of document.querySelectorAll('#colKind button')) {
+  b.addEventListener('click', () => {
+    b.blur();
+    colKind = b.dataset.kind;
+    for (const x of document.querySelectorAll('#colKind button')) x.setAttribute('aria-pressed', x === b);
+    renderCollections();
+  });
+}
+
+function renderCollections() {
+  const grid = $('#colGrid');
+  const shown = app.collections.filter(c => !colKind || c.kind === colKind);
+  const KIND = { trip: 'Trip', post: 'Post', set: 'Set' };
+  let month = null, html = '';
+  for (const c of shown) {
+    const m = c.date ? c.date.slice(0, 7) : '';
+    if (m !== month) {
+      if (month !== null) html += '</div>';
+      month = m;
+      html += `<h2 class="col-month">${m ? monthLabel(m) : 'Undated'}</h2><div class="col-cards">`;
+    }
+    const counts = [c.photos && plural(c.photos, 'photo'), c.clips && plural(c.clips, 'clip')].filter(Boolean).join(' · ') || 'empty';
+    const range = c.days ? ` · ${shortDate(c.days.from)}–${shortDate(c.days.to)}` : '';
+    html += `<article class="col-card" data-slug="${c.slug}">
+      <button class="col-open" aria-label="Open ${c.name}">
+        <span class="mosaic n${c.cover.length}">${c.cover.map(u => `<img loading="lazy" alt="" src="${u}">`).join('')}
+          <span class="chip kind">${KIND[c.kind] || ''}</span></span>
+      </button>
+      <div class="col-meta">
+        <div class="col-title"><strong>${c.name}</strong><span class="col-date" title="${c.dateSet ? 'Date you set' : 'Latest day it covers'}">${shortDate(c.date)}</span></div>
+        <div class="hint">${counts}${range}</div>
+        <div class="col-actions">
+          <button data-act="date">Set date</button><button data-act="rename">Rename</button><button data-act="delete">Delete</button>
+        </div>
+      </div>
+    </article>`;
+  }
+  if (month !== null) html += '</div>';
+  grid.innerHTML = html || '<p class="empty">No collections yet. Make one, then press S on photos and clips to add them.</p>';
+  for (const card of grid.querySelectorAll('.col-card')) {
+    const slug = card.dataset.slug, c = app.collections.find(x => x.slug === slug);
+    card.querySelector('.col-open').addEventListener('click', () => loadView(`collection:${slug}`, 'library'));
+    card.querySelector('[data-act=date]').addEventListener('click', async () => {
+      const date = prompt(`Date for ${c.name} (YYYY-MM-DD), or leave empty to use the latest day it covers:`, c.dateSet ? c.date : '');
+      if (date === null) return;
+      try {
+        await app.post('/api/collections/date', { collection: slug, date: date.trim() });
+        await refreshMenus(`${app.view?.kind}:${app.view?.id}`);
+      } catch (e) { app.status(`couldn't set the date: ${e.message}`, 0); }
+    });
+    card.querySelector('[data-act=rename]').addEventListener('click', () => { setTarget(slug); renameCollection(); });
+    card.querySelector('[data-act=delete]').addEventListener('click', () => { setTarget(slug); deleteCollection(); });
+  }
+}
+
+$('#newCol2').addEventListener('click', e => { e.currentTarget.blur(); newCollection(); });
+
 async function start() {
   const q = new URLSearchParams(location.search);
-  let want = q.get('view') || (q.get('shoot') ? `shoot:${q.get('shoot')}` : null);
+  let want = q.get('view') || (q.get('shoot') ? `shoot:${q.get('shoot')}` : 'library:all');
   if (want?.startsWith('trip:')) want = 'collection:' + want.slice(5);
   const shoots = await refreshMenus(want);
   const sel = $('#shoot');
   setTarget(stored('studio.target', ''));
   sel.addEventListener('change', () => { sel.blur(); loadView(sel.value, app.tab); });
-  if (sel.value) loadView(sel.value, q.get('tab'), q.get('frame'));
+  if (sel.value && (shoots.length || sel.value !== 'library:all')) loadView(sel.value, q.get('tab'), q.get('frame'));
   else if (!shoots.length) {
     app.setTab('library');
     $('#list').innerHTML = '<p class="empty">Your library is empty. Connect a camera card to import photos, or add shoot folders to your library.</p>';
