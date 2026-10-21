@@ -216,11 +216,23 @@ def imported_frames(library: Path) -> set[str]:
                        for f in root.glob(sub) if f.is_file()}
 
 
+# Called with the size of each chunk hashed, so a long check can show progress.
+HASH_PROGRESS = None
+_hashes: dict[tuple, str] = {}
+
+
 def file_hash(path: Path) -> str:
+    st = path.stat()
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key in _hashes:
+        return _hashes[key]
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         while chunk := handle.read(CHUNK):
+            if HASH_PROGRESS:
+                HASH_PROGRESS(len(chunk))
             digest.update(chunk)
+    _hashes[key] = digest.hexdigest()
     return digest.hexdigest()
 
 
@@ -228,8 +240,10 @@ def already_copied(shoot: Path, kind: str, src: Path, strict: bool = False) -> b
     """Per-file identity keeps missing RAW/JPEG/sidecar siblings importable.
 
     Planning compares name, size and (for the store) the card's timestamp,
-    which takes seconds; strict re-hashes both sides, which reads every byte
-    and is kept for erasing a card. Each copy was hash-verified when made.
+    which takes seconds. Strict, for erasing a card, re-reads the copy itself:
+    a store copy must still hash to the fingerprint taken from the card at
+    import (and the card file still match its size and time); a library copy
+    is compared with the card byte for byte.
     """
     local = shoot / kind / src.name
     if local.is_file():
@@ -239,8 +253,15 @@ def already_copied(shoot: Path, kind: str, src: Path, strict: bool = False) -> b
     metadata = read_manifest(shoot).get(f"{kind}/{src.name}")
     if not metadata or metadata.get("size") != src.stat().st_size:
         return False
-    if not strict and abs(metadata.get("mtime", -1) - src.stat().st_mtime) < 0.002:
+    same_time = abs(metadata.get("mtime", -1) - src.stat().st_mtime) < 0.002
+    if not strict and same_time:
         return True
+    root = store_root()
+    if strict and same_time and metadata.get("sha256") and root is not None and store_mounted(root):
+        copy = root / shoot.name / kind / src.name
+        return copy.is_file() and copy.stat().st_size == metadata["size"] and file_hash(copy) == metadata["sha256"]
+    if strict:
+        return False      # can't reach the copy to prove it: keep the card
     if metadata.get("sha256"):
         return metadata["sha256"] == file_hash(src)
     # Older manifests have no hash. Size and camera timestamp are stronger

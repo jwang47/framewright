@@ -1816,7 +1816,10 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
       do {
         await new Promise(r => setTimeout(r, 700));
         st = await (await fetch('/api/card/format')).json();
-        $('#importNow').textContent = st.phase === 'erasing' ? `formatting ${name}…` : `checking every file on ${name} against the library…`;
+        const pct = st.bytes_total ? Math.min(100, Math.round(st.bytes / st.bytes_total * 100)) : 0;
+        $('#importBar').value = pct / 100;
+        $('#importNow').textContent = st.phase === 'erasing' ? `formatting ${name}…`
+          : `verifying the library's copies of ${name} · ${pct}%`;
         $('#importProgress').hidden = false;
       } while (st.running);
       if (st.error) throw new Error(st.error);

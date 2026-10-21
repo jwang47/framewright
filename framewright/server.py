@@ -1141,7 +1141,17 @@ def run_format(root: Path, card: Path) -> None:
     try:
         state["phase"] = "checking"
         info = card_volume(card)
-        pending = card_plan(root, [card], False, strict=True)
+        from . import import_photos
+        media = [f for d in import_photos.media_dirs(card) for f in d.rglob("*")
+                 if f.is_file() and import_photos.is_media(f)]
+        state.update(bytes=0, bytes_total=sum(f.stat().st_size for f in media))
+        def progress(n: int) -> None:
+            state["bytes"] = state.get("bytes", 0) + n
+        import_photos.HASH_PROGRESS = progress
+        try:
+            pending = card_plan(root, [card], False, strict=True)
+        finally:
+            import_photos.HASH_PROGRESS = None
         if pending:
             n = sum(len(v) for v in pending.values())
             raise ValueError(f"{n} files on {card.name} are not in the library yet; import them first")
