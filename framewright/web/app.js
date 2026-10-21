@@ -2234,8 +2234,16 @@ async function whatsNew() {
   toast.querySelector('span').textContent = shown;
   toast.addEventListener('click', () => toast.remove());
   document.body.appendChild(toast);
-  setTimeout(() => toast.classList.add('out'), 7000);
-  setTimeout(() => toast.remove(), 7600);
+  // It stays until you're actually here: the fade starts six seconds after
+  // the first mouse or key activity in a visible window, or on a click.
+  const activity = ['pointermove', 'pointerdown', 'keydown', 'wheel'];
+  const begin = () => {
+    if (document.hidden) return;
+    for (const ev of activity) removeEventListener(ev, begin, true);
+    setTimeout(() => toast.classList.add('out'), 6000);
+    setTimeout(() => toast.remove(), 6600);
+  };
+  for (const ev of activity) addEventListener(ev, begin, true);
 }
 
 async function start() {
