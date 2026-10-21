@@ -830,3 +830,32 @@ main.grid > figure { content-visibility: auto; contain-intrinsic-size: auto 100p
 .toast.out { opacity: 0; transform: translateY(6px); }
 .cut-speed { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 #vidFull[aria-pressed="true"] { color: var(--pick); border-color: var(--pick); }
+
+/* Collapsible sidebar: a rail of icons. */
+.nav-toggle { margin-left: auto; padding: 0 7px; border: 0; background: transparent; color: var(--muted); font-size: 16px; line-height: 20px; }
+.nav-toggle:hover { color: var(--text); border: 0; }
+.nav-collapsed .side { flex-basis: 56px !important; padding-left: 8px; padding-right: 8px; overflow-x: hidden; }
+.nav-collapsed .side .brand { flex-direction: column; gap: 8px; padding: 4px 0; }
+.nav-collapsed .side .brand-name, .nav-collapsed .side .n, .nav-collapsed .side-label,
+.nav-collapsed .side-col .nm, .nav-collapsed .card-box > :not(.card-head), .nav-collapsed .card-head > :not(svg),
+.nav-collapsed .drive-row > :not(svg), .nav-collapsed #offloadBtn { display: none !important; }
+.nav-collapsed .side-item { font-size: 0; justify-content: center; padding: 9px 0; }
+.nav-collapsed .side-item svg { width: 18px; height: 18px; }
+.nav-collapsed .side-col { justify-content: center; padding: 5px 0; }
+.nav-collapsed .card-box { padding: 10px 0; align-items: center; }
+.nav-collapsed .drive-row { justify-content: center; padding: 4px 0; }
+.nav-collapsed .nav-split { display: none; }
+.nav-collapsed .nav-toggle { margin: 0; }
+/* Rail: every icon in the same 40 × 40 slot, centred. */
+.nav-collapsed .side { align-items: center; }
+.nav-collapsed .side .brand { width: 40px; align-items: center; padding: 4px 0 0; }
+.nav-collapsed .side .brand > svg { width: 24px; height: 24px; }
+.nav-collapsed .nav-toggle { width: 40px; height: 28px; padding: 0; text-align: center; }
+.nav-collapsed .side-nav, .nav-collapsed .side-group, .nav-collapsed #recentCols { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 40px; }
+.nav-collapsed .side-item, .nav-collapsed .side-col { width: 40px; height: 40px; padding: 0; gap: 0; justify-content: center; border-radius: 10px; }
+.nav-collapsed .side-item svg { width: 20px; height: 20px; margin: 0; }
+.nav-collapsed .side-col .swatch { width: 28px; height: 28px; border-radius: 7px; }
+.nav-collapsed .side-foot { width: 40px; align-items: center; }
+.nav-collapsed .card-box, .nav-collapsed .drive-row { width: 40px; height: 40px; padding: 0; justify-content: center; align-items: center; border-radius: 10px; }
+.nav-collapsed .card-head { justify-content: center; }
+.nav-collapsed .card-box svg, .nav-collapsed .drive-row svg { width: 20px; height: 20px; }

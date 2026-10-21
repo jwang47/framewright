@@ -58,9 +58,11 @@ export function createVideos(app) {
   let video = players[0];
   let days = [], clips = [], focus = null, loaded = null, gl = null, tex = null, texB = null, u = {};
   let forceGL = false, mixState = null, primed = null;
-  // Preview plays a clip's 540p proxy (quick to scrub) unless Full is on.
-  let full = stored('studio.fullVideo', '0') === '1';
-  const clipUrl = c => `/clip/${encodeURIComponent(c.shoot)}/${c.key}${full ? '' : '?proxy=1'}`;
+  // Play the original; borrow the clip's 540p proxy only while scrubbing, in
+  // the spare player, and hand back to the original at the frame you stop on.
+  const proxyUrl = c => `/clip/${encodeURIComponent(c.shoot)}/${c.key}?proxy=1`;
+  const clipUrl = c => `/clip/${encodeURIComponent(c.shoot)}/${c.key}`;
+  let scrubEl = null;          // the spare player showing the proxy during a scrub
   let scope = stored('studio.videoScope', 'day'), logView = stored('studio.logView', '1') === '1';
   let token = 0, current = null, focusHook = null;
   // The player can be lent to the Library's preview pane; this is where it lives.
@@ -246,24 +248,25 @@ export function createVideos(app) {
 
   function fit() {
     // The canvas covers just the picture inside the letterboxed video element.
-    const w = video.videoWidth, h = video.videoHeight;
+    const src = scrubEl || video, w = src.videoWidth, h = src.videoHeight;
     if (!w || !h) return false;
-    const box = video.getBoundingClientRect(), scale = Math.min(box.width / w, box.height / h);
+    const box = src.getBoundingClientRect(), scale = Math.min(box.width / w, box.height / h);
     const cw = Math.round(w * scale), ch = Math.round(h * scale), dpr = devicePixelRatio || 1;
     Object.assign(canvas.style, { width: cw + 'px', height: ch + 'px',
-      left: (video.offsetLeft + (box.width - cw) / 2) + 'px', top: (video.offsetTop + (box.height - ch) / 2) + 'px' });
+      left: (src.offsetLeft + (box.width - cw) / 2) + 'px', top: (src.offsetTop + (box.height - ch) / 2) + 'px' });
     const pw = Math.min(w, Math.round(cw * dpr)), ph = Math.min(h, Math.round(ch * dpr));
     if (canvas.width !== pw || canvas.height !== ph) { canvas.width = pw; canvas.height = ph; }
     return true;
   }
 
   function draw() {
-    if (canvas.hidden || !gl || video.readyState < 2 || !fit()) return;
+    const src = scrubEl || video;
+    if (canvas.hidden || !gl || src.readyState < 2 || !fit()) return;
     gl.viewport(0, 0, canvas.width, canvas.height);
     try {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, video);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, src);
       const m = mixState && mixState.el.readyState >= 2 ? mixState : null;
       if (m) {
         gl.activeTexture(gl.TEXTURE1);
@@ -306,13 +309,51 @@ export function createVideos(app) {
   // dragging where the browser has it, an exact seek when the drag ends.
   const pending = new WeakMap();
   function scrubTo(el, t, dragging = false) {
+    if (dragging && scrubEl && el === video) el = scrubEl;
     if (el.seeking) { pending.set(el, [t, dragging]); return; }
     if (dragging && el.fastSeek) el.fastSeek(t); else el.currentTime = t;
   }
   for (const pl of players) pl.addEventListener('seeked', () => {
     const next = pending.get(pl);
     if (next) { pending.delete(pl); scrubTo(pl, ...next); }
+    if (pl === scrubEl) draw();
   });
+
+  // Start a scrub on the proxy: load it in the spare player at this frame
+  // and put it on screen; the original stays paused underneath.
+  function scrubStart() {
+    if (!current?.online || scrubEl) return;
+    primed = null;             // the spare player is the scrubber now; Cut primes again afterwards
+    const spare = players.find(pl => pl !== video), url = proxyUrl(current), t = video.currentTime;
+    video.pause();
+    const show = () => {
+      if (scrubEl !== spare) return;
+      spare.classList.remove('standby');
+      video.classList.add('standby');
+      draw();
+    };
+    scrubEl = spare;
+    if (!spare.src.endsWith(url)) { spare.src = url; spare.addEventListener('loadeddata', show, { once: true }); }
+    else show();
+    spare.addEventListener('loadedmetadata', () => { spare.currentTime = t; }, { once: true });
+    if (spare.readyState >= 1) spare.currentTime = t;
+  }
+
+  // End it: the original seeks to where the scrub stopped, then takes over.
+  function scrubEnd(at) {
+    if (!scrubEl) return;
+    const proxy = scrubEl, t = at ?? proxy.currentTime;
+    const back = () => {
+      if (scrubEl !== proxy) return;
+      scrubEl = null;
+      proxy.pause();
+      proxy.classList.add('standby');
+      video.classList.remove('standby');
+      draw();
+    };
+    video.addEventListener('seeked', back, { once: true });
+    video.currentTime = t;
+  }
 
   function step(frames) {
     const c = current;
@@ -345,16 +386,18 @@ export function createVideos(app) {
   });
   new ResizeObserver(draw).observe($('#vidStage'));
   $('#vidPlay').addEventListener('click', e => { e.currentTarget.blur(); toggle(); });
-  $('#vidSeek').addEventListener('input', e => { seeking = true; scrubTo(video, +e.target.value, true); });
-  $('#vidSeek').addEventListener('change', e => { seeking = false; scrubTo(video, +e.target.value); e.target.blur(); });
-  $('#vidFull').setAttribute('aria-pressed', full);
-  $('#vidFull').addEventListener('click', e => {
-    e.currentTarget.blur();
-    full = !full;
-    store('studio.fullVideo', full ? '1' : '0');
-    $('#vidFull').setAttribute('aria-pressed', full);
-    if (current) { const t = video.currentTime; open(current); video.addEventListener('loadedmetadata', () => { video.currentTime = t; }, { once: true }); }
+  $('#vidSeek').addEventListener('input', e => {
+    if (!seeking) scrubStart();
+    seeking = true;
+    scrubTo(video, +e.target.value, true);
   });
+  $('#vidSeek').addEventListener('change', e => {
+    seeking = false;
+    if (scrubEl) scrubEnd(+e.target.value);
+    else scrubTo(video, +e.target.value);
+    e.target.blur();
+  });
+
   $('#vidRate').addEventListener('change', e => { video.playbackRate = +e.target.value; e.target.blur(); });
   $('#vidMute').addEventListener('click', e => { e.currentTarget.blur(); video.muted = !video.muted; });
   $('#vidFs').addEventListener('click', e => {
@@ -457,8 +500,11 @@ export function createVideos(app) {
     step,
     // For the Cut workspace (cut.js): the source clip, and loading any clip.
     current: () => current,
-    openClip(c) { loaded = id(c); primed = null; open(c); },
-    scrubTo,
+    openClip(c) {
+      if (scrubEl) { scrubEl.pause(); scrubEl.classList.add('standby'); video.classList.remove('standby'); scrubEl = null; }
+      loaded = id(c); primed = null; open(c);
+    },
+    scrubTo, scrubStart, scrubEnd,
     // Whether the player already has this clip loaded (proxy or full).
     holds: (el, c) => el.src.includes(`/clip/${encodeURIComponent(c.shoot)}/${c.key}`) && /(\?|$)/.test(el.src),
     active: () => video,

@@ -12,7 +12,8 @@
 <nav class="side" aria-label="Main">
   <div class="brand">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--pick)" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3l3.5 6M21 12h-6.5M16.5 19.8L13 13.8M7.5 19.8l3.5-6M3 12h6.5M7.5 4.2L11 10.2"/></svg>
-    <span>Framewright</span>
+    <span class="brand-name">Framewright</span>
+    <button id="navToggle" class="nav-toggle" aria-label="Collapse the sidebar" title="Collapse the sidebar (⌃⌘S)">‹</button>
   </div>
   <div class="side-nav">
     <button class="side-item" id="navLibrary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Library <span class="n" id="navLibraryN"></span></button>
@@ -260,7 +261,6 @@
           <option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option>
         </select>
         <button id="vidMute" aria-label="Mute">🔊</button>
-        <button id="vidFull" aria-pressed="false" title="Play the original instead of the quick 540p preview copy">Full</button>
         <button id="vidFs" aria-label="Fullscreen" title="Fullscreen">⤢</button>
       </div>
       <div class="loupe-bar">

@@ -630,8 +630,14 @@ export function createCut(app, videos) {
     const left = $('#cutLanes').getBoundingClientRect().left;
     scrub((e.clientX - left) / pps());
     paint();
+    videos.scrubStart();
     const move = ev => scrub((ev.clientX - left) / pps());
-    const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); seek(playhead); };
+    const up = () => {
+      removeEventListener('mousemove', move);
+      removeEventListener('mouseup', up);
+      videos.scrubEnd();
+      setTimeout(() => seek(playhead), 0);
+    };
     addEventListener('mousemove', move);
     addEventListener('mouseup', up);
   });

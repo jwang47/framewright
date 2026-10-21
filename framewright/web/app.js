@@ -2141,6 +2141,34 @@ async function openLibrary(filter = 'all') {
   paintNav();
 }
 
+// The sidebar folds to a rail of icons (⌃⌘S); remembered.
+function setNavCollapsed(on) {
+  document.querySelector('.shell').classList.toggle('nav-collapsed', on);
+  $('#navToggle').textContent = on ? '›' : '‹';
+  $('#navToggle').setAttribute('aria-label', on ? 'Expand the sidebar' : 'Collapse the sidebar');
+  $('#navToggle').title = `${on ? 'Expand' : 'Collapse'} the sidebar (⌃⌘S)`;
+  store('studio.navCollapsed', on ? '1' : '0');
+  window.dispatchEvent(new Event('resize'));
+}
+setNavCollapsed(stored('studio.navCollapsed', '0') === '1');
+for (const [id, name] of [['#navLibrary', 'Library'], ['#navCollections', 'Collections'], ['#navPicks', 'Picks']]) $(id).title = name;
+// Folded, the card's icon is the Import button.
+$('#cardBox').addEventListener('click', e => {
+  if (!document.querySelector('.shell').classList.contains('nav-collapsed') || e.target.closest('button')) return;
+  $('#importBtn').hidden ? $('#cardEject')?.click() : $('#importBtn').click();
+});
+$('#navToggle').addEventListener('click', e => {
+  e.currentTarget.blur();
+  setNavCollapsed(!document.querySelector('.shell').classList.contains('nav-collapsed'));
+});
+addEventListener('keydown', e => {
+  if (e.ctrlKey && e.metaKey && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    $('#navToggle').click();
+  }
+}, true);
+
 $('#navLibrary').addEventListener('click', e => { e.currentTarget.blur(); openLibrary('all'); });
 $('#navPicks').addEventListener('click', e => { e.currentTarget.blur(); openLibrary('picks'); });
 $('#navCollections').addEventListener('click', e => { e.currentTarget.blur(); app.setTab('collections'); });
