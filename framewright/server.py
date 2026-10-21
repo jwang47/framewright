@@ -93,6 +93,7 @@ from .import_photos import (  # noqa: E402
     RAW_EXTS,
     ImportError_,
     find_cards,
+    card_label,
     delete_verified_source,
     frame_key,
     offload_file,
@@ -1136,7 +1137,26 @@ def card_volume(card: Path) -> dict:
     return info
 
 
-def run_format(root: Path, card: Path) -> None:
+CARD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,10}$")
+
+
+def clean_card_name(name: object) -> str:
+    """A volume name every camera and computer reads: 11 plain characters."""
+    if not isinstance(name, str) or not CARD_NAME.match(name.strip()):
+        raise ValueError("a card name is 1–11 letters, digits, spaces, - or _")
+    return name.strip()
+
+
+def rename_card(card: Path, name: str) -> None:
+    info = card_volume(card)
+    if info["FilesystemType"] == "msdos":
+        name = name.upper()
+    result = subprocess.run(["diskutil", "rename", info["DeviceIdentifier"], name], capture_output=True, text=True, timeout=60)
+    if result.returncode:
+        raise ValueError((result.stderr or result.stdout).strip() or "diskutil couldn't rename the card")
+
+
+def run_format(root: Path, card: Path, new_name: str | None = None) -> None:
     state = _format
     try:
         state["phase"] = "checking"
@@ -1157,7 +1177,8 @@ def run_format(root: Path, card: Path) -> None:
             raise ValueError(f"{n} files on {card.name} are not in the library yet; import them first")
         state["phase"] = "erasing"
         personality = "ExFAT" if info["FilesystemType"] == "exfat" else "MS-DOS FAT32"
-        name = card.name if info["FilesystemType"] == "exfat" else card.name.upper()[:11]
+        name = new_name or card.name
+        name = name if info["FilesystemType"] == "exfat" else name.upper()[:11]
         result = subprocess.run(["diskutil", "eraseVolume", personality, name, info["DeviceIdentifier"]],
                                 capture_output=True, text=True, timeout=300)
         if result.returncode:
@@ -1911,6 +1932,19 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/cut/reveal":
                 cuts.reveal(Path(_cut_export.get("path", "")))
                 self.send_json({"ok": True})
+            elif url.path == "/api/card/rename":
+                body = json.loads(self.read_body())
+                if sys.platform != "darwin":
+                    raise ValueError("rename the card in the camera or your file manager")
+                card = {c.name: c for c in plugged_cards()}.get(str(body.get("card", "")))
+                if card is None:
+                    self.send_json({"error": "that card is not plugged in"}, HTTPStatus.CONFLICT)
+                    return
+                if _import.get("running") or _format.get("running"):
+                    self.send_json({"error": "wait for the import or format to finish"}, HTTPStatus.CONFLICT)
+                    return
+                rename_card(card, clean_card_name(body.get("name")))
+                self.send_json({"ok": True})
             elif url.path == "/api/card/format":
                 self.api_format(json.loads(self.read_body() or b"{}"))
             elif url.path == "/api/offload":
@@ -1964,7 +1998,9 @@ class Handler(BaseHTTPRequestHandler):
         if not cards:
             self.send_json({"card": None, "cards": []})
             return
+        labels = {c.name: card_label(c) for c in cards}
         body: dict = {"card": ", ".join(c.name for c in cards), "cards": [c.name for c in cards],
+                      "labels": labels, "label": ", ".join(v["label"] for v in labels.values()),
                       "eject": sys.platform == "darwin", "store": drive_name() if store_mounted() else None,
                       "deleteFromCard": import_settings()[1],
                       "to": drive_name() if store_mounted() else (f"the library ({drive_name()} not plugged in)" if configured_store() else "the library")}
@@ -2100,13 +2136,14 @@ class Handler(BaseHTTPRequestHandler):
         if body.get("confirm") != card.name:
             self.send_json({"error": "type the card's name to confirm"}, HTTPStatus.BAD_REQUEST)
             return
+        new_name = clean_card_name(body["name"]) if body.get("name") else None
         with _import_lock:
             if _import.get("running") or _offload.get("running") or _format.get("running"):
                 self.send_json({"error": "wait for the import or offload to finish"}, HTTPStatus.CONFLICT)
                 return
             _format.clear()
             _format.update(running=True, card=card.name, phase="checking", error=None, done=False)
-        threading.Thread(target=run_format, args=(self.root, card), daemon=True).start()
+        threading.Thread(target=run_format, args=(self.root, card, new_name), daemon=True).start()
         self.send_json(dict(_format))
 
     def api_eject(self) -> None:

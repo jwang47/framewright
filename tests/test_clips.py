@@ -191,5 +191,17 @@ class ClipTests(unittest.TestCase):
         self.assertTrue(server._format["done"])
         self.assertEqual(calls, [["diskutil", "eraseVolume", "ExFAT", "CARD", "disk99s1"]])
 
+    def test_card_names_and_labels(self):
+        from framewright import server, import_photos
+        self.assertEqual(server.clean_card_name(" FX30 "), "FX30")
+        for bad in ("", "a" * 12, "FX/30", "../x", 5):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                server.clean_card_name(bad)
+        card = self.base / "CARD"
+        (card / "M4ROOT" / "CLIP").mkdir(parents=True)
+        (card / "M4ROOT" / "CLIP" / "C0001M01.XML").write_bytes(SIDECAR)
+        label = import_photos.card_label(card)
+        self.assertEqual((label["camera"], label["media"]), ("Acme Cine 1", "CFexpress"))
+
 if __name__ == "__main__":
     unittest.main()

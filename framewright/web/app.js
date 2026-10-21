@@ -1630,7 +1630,7 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
 // options. Optionally imports as soon as a card appears and ejects it after.
 (function cardImport() {
   const btn = $('#importBtn'), dlg = $('#importDlg'), go = $('#importGo'), bar = $('#busy');
-  let card = null, cards = [], groups = [], running = false, deleteInitialized = false, error = null, dest = null, many = false;
+  let labels = {}, card = null, cards = [], groups = [], running = false, deleteInitialized = false, error = null, dest = null, many = false;
   const auto = $('#importAuto'), autoEject = $('#importAutoEject');
   auto.checked = stored('studio.autoImport', '0') === '1';
   autoEject.checked = stored('studio.autoEject', '0') === '1';
@@ -1666,7 +1666,9 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     error = res.error || null;
     dest = res.store;
     many = (res.cards || []).length > 1;
-    $('#importCard').textContent = card;
+    labels = res.labels || {};
+    $('#importCard').textContent = res.label || card;
+    $('#cardName').textContent = res.label || card;
     $('#importEject').hidden = !res.eject;
     $('#importFormat').hidden = !res.eject || !!res.error || (res.groups || []).length > 0;
     cards = res.cards || [];
@@ -1810,8 +1812,11 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
     if (typed === null) return;
     const name = typed.trim();
     if (!cards.includes(name)) return app.status(`no connected card is called "${name}"`, 4000);
+    const suggest = labels[name]?.short || name;
+    const newName = prompt('Name the card (up to 11 letters or digits; Finder and other computers show it):', suggest);
+    if (newName === null) return;
     try {
-      await app.post('/api/card/format', { card: name, confirm: name });
+      await app.post('/api/card/format', { card: name, confirm: name, name: newName.trim() || name });
       let st;
       do {
         await new Promise(r => setTimeout(r, 700));
@@ -1845,6 +1850,21 @@ $('#deleteCol').addEventListener('click', e => { e.currentTarget.blur(); deleteC
   });
 
   $('#cardCancel').addEventListener('click', () => $('#importCancel').click());
+  // Name the card itself, so it reads the same in Finder and on any computer.
+  $('#cardRename').addEventListener('click', async e => {
+    e.currentTarget.blur();
+    const current = cards.length > 1 ? prompt(`Which card? ${cards.join(', ')}`, cards[0]) : cards[0];
+    if (!current || !cards.includes(current.trim())) return;
+    const name = prompt(`New name for ${current} (up to 11 letters or digits):`, labels[current]?.short || current);
+    if (!name?.trim() || name.trim() === current) return;
+    try {
+      await app.post('/api/card/rename', { card: current.trim(), name: name.trim() });
+      app.status(`renamed ${current} to ${name.trim()}`, 4000);
+      card = null;           // the next poll sees it under its new name
+    } catch (err) {
+      app.status(`couldn't rename: ${err.message}`, 0);
+    }
+  });
   $('#importCancel').addEventListener('click', async e => {
     e.currentTarget.blur();
     await app.post('/api/import/cancel', {}).catch(() => {});

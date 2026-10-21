@@ -151,6 +151,31 @@ def find_card() -> Path:
     return found[0]
 
 
+def card_label(root: Path) -> dict:
+    """What a card is, for showing it: the camera that wrote it (from the first
+    photo or clip sidecar that names one) and its kind. Sony keeps M4ROOT at
+    the root of a CFexpress Type A card and under PRIVATE/ on an SD card."""
+    model = None
+    for d in media_dirs(root):
+        for f in sorted(d.rglob("*"))[:400]:
+            ext = f.suffix.lower()
+            if ext in IMAGE_EXTS:
+                model = camera_model(f)
+            elif ext == ".xml" and CLIP_SIDECAR.match(f.name.split(".")[0]):
+                model = clip_model(f)
+            if model:
+                break
+        if model:
+            break
+    media = "CFexpress" if (root / "M4ROOT" / "CLIP").is_dir() else "SD" if clip_dir(root) or (root / "DCIM").is_dir() else "card"
+    short = None
+    if model:
+        words = model.split()
+        short = re.sub(r"^(ILCE|ILME|DSC|ZV)-", "", words[-1]) if len(words) > 1 else model
+    return {"camera": model, "short": short, "media": media,
+            "label": f"{short} · {media}" if short else f"{root.name} · {media}"}
+
+
 def resolve_source(source: str | None) -> Path:
     if source is None:
         return find_card()
