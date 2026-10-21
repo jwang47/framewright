@@ -726,3 +726,23 @@ dialog { background: var(--panel); color: var(--text); border: 1px solid var(--l
    padding, its side padding, and the row gap below it. */
 .grid > .month { top: -4px; margin-left: -20px; margin-right: -20px; padding-left: 20px; padding-right: 20px;
   box-shadow: 0 4px 0 var(--bg); }
+
+/* Quiet tiles: status as thin marks, not badges. Picked is an amber bar
+   along the bottom, the collection number a small pill, the star only on
+   hover; a duration chip is all that marks a video. */
+.frame.clip .play { display: none; }
+figure.picked .frame { outline-color: transparent; }
+figure.picked .frame::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+  background: var(--pick); z-index: 1; pointer-events: none; }
+.star { width: 20px; height: 20px; font-size: 11px; line-height: 20px; top: 3px; right: 3px; }
+figure.picked .star, figure.focus .star { opacity: 0; }
+.frame:hover .star { opacity: 1; }
+.frame .sel { top: 3px; left: 3px; min-width: 14px; height: 14px; padding: 0 4px; border-radius: 7px;
+  font-size: 9px; line-height: 14px; font-weight: 700; }
+figure:has(.sel:not([hidden])) .frame { box-shadow: none; }
+.frame .dur, .frame .hfr { bottom: 5px; font-size: 9px; line-height: 13px; padding: 0 4px; }
+.frame .dur { right: 3px; }
+.frame.clip .hfr { right: auto; left: 3px; }
+.frame.clip .where { display: none; }
+main.small .frame .dur, main.small .frame .hfr { display: none; }
+main.small .frame .sel { min-width: 8px; width: 8px; height: 8px; padding: 0; font-size: 0; }
