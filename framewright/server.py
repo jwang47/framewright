@@ -1864,11 +1864,13 @@ class Handler(BaseHTTPRequestHandler):
         change event naming "css" or "page" whenever the page code changes.
         watch maps event names to (file, revision function), e.g. {"edit":
         (recipe, edit_rev)}: each sends its event, with the new revision,
-        when the file changes and the revision with it."""
+        when the file changes and the revision with it. A store event, "1"
+        or "0", says the external drive was plugged in or unplugged."""
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
+        mounted, ticks = store_mounted(), 0     # before hello, so no change slips between
         try:
             # The boot id and a fingerprint of the page code: a page that
             # reconnects after missing a change still sees it and reloads.
@@ -1881,6 +1883,11 @@ class Handler(BaseHTTPRequestHandler):
             stamps = {name: mtimes([path]) for name, (path, _) in watch.items()}
             while True:
                 time.sleep(0.4)
+                ticks += 1
+                if ticks % 5 == 0 and store_mounted() != mounted:
+                    mounted = not mounted
+                    self.wfile.write(f"event: store\ndata: {int(mounted)}\n\n".encode())
+                    self.wfile.flush()
                 for name, (path, rev_of) in watch.items():
                     if mtimes([path]) == stamps[name]:
                         continue

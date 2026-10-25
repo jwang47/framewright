@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 from framewright.server import Handler
 from framewright.render import RenderHandler
@@ -34,6 +35,27 @@ class HTTPBoundaryTests(unittest.TestCase):
             data = json.loads(body)
             self.assertEqual(data['shoots'], [day.name])
             self.assertEqual(data['shootCounts'], {day.name: 4})
+
+    def test_event_stream_says_when_the_drive_is_plugged_in_or_unplugged(self):
+        class TestHandler(Handler):
+            pass
+
+        TestHandler.root = Path(tempfile.mkdtemp())
+        mounted = [False]
+        with mock.patch('framewright.server.store_mounted', lambda: mounted[0]):
+            server = self.start(TestHandler)
+            server.daemon_threads, server.block_on_close = True, False
+            connection = HTTPConnection(*server.server_address, timeout=5)
+            self.addCleanup(connection.close)
+            connection.request('GET', '/api/events')
+            response = connection.getresponse()
+            self.assertEqual(response.readline().strip(), b'retry: 500')
+            response.readline(), response.readline(), response.readline()   # hello
+            mounted[0] = True
+            self.assertEqual([response.readline().strip() for _ in range(2)], [b'event: store', b'data: 1'])
+            response.readline()
+            mounted[0] = False
+            self.assertEqual([response.readline().strip() for _ in range(2)], [b'event: store', b'data: 0'])
 
     def start(self, handler):
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
