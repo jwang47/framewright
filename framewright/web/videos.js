@@ -498,6 +498,12 @@ export function createVideos(app) {
     },
     // Library: play one clip in the preview pane.
     lend(host, c) { attach(host); if (loaded !== id(c)) open(c); },
+    // The drive came or went: open the focused clip again when it's next
+    // shown, and refetch the bin if it's on screen.
+    storeChanged() {
+      loaded = null;
+      if (!$('#videos').hidden) load();
+    },
     toggle,
     step,
     // For the Cut workspace (cut.js): the source clip, and loading any clip.

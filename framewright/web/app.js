@@ -243,6 +243,22 @@ export const app = {
     }
   },
 
+  // The external drive was plugged in or unplugged: fetch what's online again
+  // and repaint in place, keeping the view, filter and focus.
+  async storeChanged() {
+    if (!this.view) return;
+    await refreshMenus(`${this.view.kind}:${this.view.id}`);
+    const { clips } = await fetchView(this.view.kind, this.view.id);
+    const online = new Map(clips.map(c => [`clip:${c.shoot}/${c.key}`, c.online]));
+    for (const c of this.clips) if (online.has(c.id)) c.online = online.get(c.id);
+    if (this.tab === 'library') {
+      library.render();
+      library.setFocus(this.focusKey, false);
+    }
+    videos.storeChanged();
+    await cut.storeChanged();
+  },
+
   async trashMarked() {
     const marked = library.merged().filter(x => x.rejected);
     if (!marked.length) return;
@@ -1461,9 +1477,8 @@ function setTarget(slug) {
   document.querySelector('.tabs [data-tab=post]').hidden = !app.target;
 }
 
-async function loadView(value, tab, frame) {
-  let [kind, id] = value.split(/:(.*)/s);
-  if (kind === 'trip') kind = 'collection';          // links from before collections
+// A view's frames and clips, as the server has them now.
+async function fetchView(kind, id) {
   const q = kind === 'collection' ? `collection=${encodeURIComponent(id)}`
     : kind === 'library' ? 'all=1' : `shoot=${encodeURIComponent(id)}`;
   const [data, clipData] = await Promise.all([
@@ -1471,9 +1486,16 @@ async function loadView(value, tab, frame) {
     kind === 'shoot' ? fetch('/api/clips?' + q).then(r => r.ok ? r.json() : { days: [] })
       : kind === 'library' ? fetch('/api/clips').then(r => r.ok ? r.json() : { days: [] }) : null,
   ]);
+  return { data, clips: clipData ? clipData.days.flatMap(d => d.clips) : data.clips || [] };
+}
+
+async function loadView(value, tab, frame) {
+  let [kind, id] = value.split(/:(.*)/s);
+  if (kind === 'trip') kind = 'collection';          // links from before collections
+  const { data, clips } = await fetchView(kind, id);
   app.view = { kind, id, name: data.name || id, days: data.days || null };
   app.frames = data.frames.map(f => ({ ...f, id: `${f.shoot}/${f.key}`, selected: 0 }));
-  app.clips = (clipData ? clipData.days.flatMap(d => d.clips) : data.clips || [])
+  app.clips = clips
     .map(c => ({ ...c, id: `clip:${c.shoot}/${c.key}`, video: true, selected: c.selected || 0 }));
   app.chosen = new Set();
   app.focusKey = app.frame(frame) || app.clip(frame) ? frame : (library.merged()[0] || {}).id || null;
@@ -2308,7 +2330,9 @@ async function start() {
 // page code changes, and edit and proposal events when the recipe or the
 // proposal of the frame being developed changes on disk, and post events when
 // the photos or layout of the collection whose post is open change (the
-// stream reconnects to watch each new frame or collection). CSS is swapped in place; anything else reloads, after
+// stream reconnects to watch each new frame or collection), and store events
+// when the external drive is plugged in or unplugged, which refetch what's
+// online in place. CSS is swapped in place; anything else reloads, after
 // saving a pending edit. A new boot id means the server restarted with new
 // code, so the page reloads to match it. The URL keeps the view and frame.
 (function hotReload() {
@@ -2343,6 +2367,7 @@ async function start() {
     es.addEventListener('edit', e => develop.remoteChanged(e.data));
     es.addEventListener('proposal', () => develop.proposalChanged());
     es.addEventListener('post', e => post.remoteChanged(e.data));
+    es.addEventListener('store', () => app.storeChanged());
   }
   function rewatch() {
     const q = [watching.edit, watching.post].filter(Boolean).join('&');

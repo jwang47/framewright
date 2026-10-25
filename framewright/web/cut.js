@@ -682,6 +682,12 @@ export function createCut(app, videos) {
       paintMarks();
     },
     hide() { stop(); },
+    // The drive came or went: refetch the cut's clips, whose online state changed.
+    async storeChanged() {
+      meta.clear();
+      if (cut) await Promise.all([...new Set(cut.clips.map(c => c.shoot))].map(clipMeta));
+      if (!$('#videos').hidden) paint();
+    },
     // Keys the Cut workspace takes before the bin's own (videos.js).
     onKey(e) {
       const k = e.key.toLowerCase();
