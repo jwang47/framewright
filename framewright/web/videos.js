@@ -58,10 +58,14 @@ export function createVideos(app) {
   let video = players[0];
   let days = [], clips = [], focus = null, loaded = null, gl = null, tex = null, texB = null, u = {};
   let forceGL = false, mixState = null, primed = null;
-  // Play the original; borrow the clip's 540p proxy only while scrubbing, in
-  // the spare player, and hand back to the original at the frame you stop on.
+  // Play the original; borrow the clip's 540p proxy while scrubbing, in the
+  // spare player, and hand back to the original at the frame you stop on.
   const proxyUrl = c => `/clip/${encodeURIComponent(c.shoot)}/${c.key}?proxy=1`;
   const clipUrl = c => `/clip/${encodeURIComponent(c.shoot)}/${c.key}`;
+  // A cut's program playback plays proxies only: jumping between 4K originals
+  // at every edit stutters, and export renders from the originals anyway.
+  let useProxy = false;
+  const playUrl = c => (useProxy ? proxyUrl : clipUrl)(c);
   let scrubEl = null;          // the spare player showing the proxy during a scrub
   let scope = stored('studio.videoScope', 'day'), logView = stored('studio.logView', '1') === '1';
   let token = 0, current = null, focusHook = null;
@@ -194,14 +198,24 @@ export function createVideos(app) {
     requestAnimationFrame(draw);
   }
 
+  // Program playback (cut.js): always draw through the shader, so a
+  // transition can blend the two players, and play proxies.
+  function program(onOff) {
+    forceGL = useProxy = onOff;
+    if (!onOff) { mixState = null; for (const pl of players) if (pl !== video) pl.pause(); }
+    // Back to the source view: put the original back in place of the proxy.
+    if (!onOff && current && video.src.endsWith(proxyUrl(current))) { const c = current; current = null; open(c); }
+    if (current) useGL(current);
+  }
+
   function open(c) {
-    const same = current && id(current) === id(c) && video.src.endsWith(clipUrl(c));
+    const same = current && id(current) === id(c) && video.src.endsWith(playUrl(c));
     current = c;
     loaded = id(c);
     video.pause();
     if (!c.online) { unload(); loaded = id(c); canvas.hidden = true; return; }
     if (same) { paintControls(); return; }     // already loaded: no reload, no flash
-    video.src = clipUrl(c);
+    video.src = playUrl(c);
     video.poster = `/clipposter/${encodeURIComponent(c.shoot)}/${c.key}.jpg`;
     useGL(c);
     paintControls();
@@ -516,17 +530,11 @@ export function createVideos(app) {
     // Whether the player already has this clip loaded (proxy or full).
     holds: (el, c) => el.src.includes(`/clip/${encodeURIComponent(c.shoot)}/${c.key}`) && /(\?|$)/.test(el.src),
     active: () => video,
-    // Program playback (cut.js): always draw through the shader, so a
-    // transition can blend the two players.
-    program(onOff) {
-      forceGL = onOff;
-      if (!onOff) { mixState = null; for (const pl of players) if (pl !== video) pl.pause(); }
-      if (current) useGL(current);
-    },
+    program,
     // Load a clip into the spare player, paused at `at` seconds.
     prime(c, at) {
       const spare = players.find(pl => pl !== video);
-      const src = clipUrl(c);
+      const src = playUrl(c);
       primed = { c, el: spare };
       const seek = () => { spare.currentTime = at; };
       if (!spare.src.endsWith(src)) {
@@ -559,7 +567,7 @@ export function createVideos(app) {
     fullscreen() { $('#vidFs').click(); },
     log() { return logView; },
     pretty, clock,
-    hide() { video.pause(); },
+    hide() { video.pause(); if (useProxy) program(false); },
     reload() { if (app.tab === 'videos') load(); },
     onKey(e) {
       const k = e.key.toLowerCase();
